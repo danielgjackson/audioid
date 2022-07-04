@@ -1,0 +1,12 @@
+{
+    "cSpell.words": [
+        "audioid",
+        "MINIAUDIO",
+        "Wmaybe"
+    ],
+    "files.associations": {
+        "audioid.h": "c",
+        "stdio.h": "c",
+        "miniaudio.h": "c"
+    }
+}
