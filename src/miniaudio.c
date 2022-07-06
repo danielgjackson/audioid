@@ -1,11 +1,16 @@
-#ifdef __GNUC__ // __clang__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#if defined(__GNUC__) && !defined(__clang__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#elif defined(__clang__)
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
-#ifdef __GNUC__ // __clang__
-#pragma GCC diagnostic pop
+#if defined(__GNUC__) && !defined(__clang__)
+    #pragma GCC diagnostic pop
+#elif defined(__clang__)
+    #pragma clang diagnostic pop
 #endif
