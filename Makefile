@@ -5,7 +5,7 @@ CC = gcc
 CFLAGS = -O2 -Wall
 LIBS = -lm -lpthread -ldl
 SRC = src/main.c src/audioid.c src/minfft.c src/miniaudio.c
-INC = src/audioid.h src/minfft.h src/miniaudio.h
+INC = src/audioid.h src/dr_wav.h src/minfft.h src/miniaudio.h
 all: audioid
 
 audioid: Makefile $(SRC) $(INC)

@@ -7,6 +7,10 @@
 extern "C" {
 #endif
 
+#include <stdbool.h>
+
+#define AUDIOID_SAMPLE_RATE 16000
+
 typedef struct audioid_tag audioid_t;
 
 // Allocate an audioid object, this will also initialize the object.
@@ -16,12 +20,15 @@ audioid_t *AudioIdCreate();
 void AudioIdDestroy();
 
 // Initialize an audioid object with a new configuration
-void AudioIdInit(audioid_t *audioid);
+void AudioIdInit(audioid_t *audioid, const char *filename);
 
 // Start audio processing on an audioid object
-void AudioIdStart(audioid_t *audioid);
+bool AudioIdStart(audioid_t *audioid);
 
-// Shutdown an audioid object (but do not destroy it), this will initialize the object and it can be used again
+// Wait until audio processing has completed
+void AudioIdWaitUntilDone(audioid_t *audioid);
+
+// Shutdown an audioid object (but do not destroy it), the object can be used again
 void AudioIdShutdown(audioid_t *audioid);
 
 #ifdef __cplusplus

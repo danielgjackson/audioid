@@ -11,4 +11,4 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 miniaudio.h - Copyright David Reid, Public Domain/MIT-0, https://miniaud.io
 
-minfft.{c,h} - Copyright (c) 2016-2022 Alexander Mukhin, MIT License, https://github.com/aimukhin/minfft
+minfft.{c,h} dr_wav.h - Copyright (c) 2016-2022 Alexander Mukhin, MIT License, https://github.com/aimukhin/minfft
