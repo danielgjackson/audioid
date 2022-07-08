@@ -10,7 +10,7 @@
 
 #include "audioid.h"
 
-// State
+// Detector state
 typedef struct audioid_tag {
     // Configuration
     const char *filename;
@@ -30,6 +30,20 @@ typedef struct audioid_tag {
     size_t totalSamples;
 
 } audioid_t;
+
+// Fingerprint state
+// typedef struct fingerprint_tag {
+
+//     minfft_real *input;
+//     minfft_cmpl *output; // (numSamples/2)+1
+//     minfft_aux *aux;
+
+//     aux = minfft_mkaux_realdft_1d(numSamples);
+//     minfft_realdft(input, output, aux);
+// 	   minfft_free_aux(aux);
+
+// } fingerprint_t;
+
 
 // Process sample data
 static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCount) {
@@ -118,13 +132,16 @@ bool AudioIdStart(audioid_t *audioid) {
 void AudioIdWaitUntilDone(audioid_t *audioid) {
     if (audioid->filename != NULL) {
         if (audioid->decoderInitialized) {
-
             #define MAX_FRAME_COUNT 1000
-            int16_t output[MAX_FRAME_COUNT];
-            ma_uint64 framesRead = ma_decoder_read_pcm_frames(audioid->decoder, &output, MAX_FRAME_COUNT);
-            fprintf(stderr, "RESULT: %d\n", (int)framesRead);
-// TODO: Loop over all frames in file
-
+            int16_t samples[MAX_FRAME_COUNT];
+            for(;;) {
+                ma_uint64 framesRead = 0;
+                ma_result result = ma_decoder_read_pcm_frames(&audioid->decoder, &samples, MAX_FRAME_COUNT, &framesRead);
+                if (framesRead <= 0) break;
+                fprintf(stderr, "RESULT: %d\n", (int)framesRead);
+                AudioIdProcess(audioid, samples, (size_t)framesRead);
+                if (result != MA_SUCCESS) break;
+            }
         }
     } else {
         if (audioid->deviceInitialized) {
@@ -142,6 +159,7 @@ void AudioIdShutdown(audioid_t *audioid) {
         audioid->deviceInitialized = false;
     }
     if (audioid->decoderInitialized) {
+        fprintf(stderr, "AUDIOID: Closing audio file.\n");
         ma_decoder_uninit(&audioid->decoder);
         audioid->decoderInitialized = false;
     }
