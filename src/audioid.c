@@ -32,17 +32,55 @@ typedef struct audioid_tag {
 } audioid_t;
 
 // Fingerprint state
-// typedef struct fingerprint_tag {
+typedef struct fingerprint_tag {
+    minfft_real *input;
+    minfft_cmpl *output; // (numSamples/2)+1
+    minfft_aux *aux;
+    size_t numSamples;
+} fingerprint_t;
 
-//     minfft_real *input;
-//     minfft_cmpl *output; // (numSamples/2)+1
-//     minfft_aux *aux;
+fingerprint_t *FingerprintCreate(size_t numSamples) {
+    fingerprint_t *fingerprint = malloc(sizeof(fingerprint_t));
+    memset(fingerprint, 0, sizeof(*fingerprint));
+    fingerprint->numSamples = numSamples;
+    fingerprint->input = malloc(sizeof(minfft_real) * fingerprint->numSamples);
+    fingerprint->output = malloc(sizeof(minfft_cmpl) * fingerprint->numSamples);
+    fingerprint->aux = minfft_mkaux_realdft_1d(fingerprint->numSamples);
+}
 
-//     aux = minfft_mkaux_realdft_1d(numSamples);
-//     minfft_realdft(input, output, aux);
-// 	   minfft_free_aux(aux);
+void FingerprintDestroy(fingerprint_t *fingerprint) {
+    if (fingerprint->aux != NULL) {
+        minfft_free_aux(fingerprint->aux);
+        fingerprint->aux = NULL;
+    }
+    if (fingerprint->input != NULL) {
+        free(fingerprint->input);
+        fingerprint->input = NULL;
+    }
+    if (fingerprint->output != NULL) {
+        free(fingerprint->output);
+        fingerprint->output = NULL;
+    }
+    if (fingerprint != NULL) {
+        free(fingerprint);
+    }
+}
 
-// } fingerprint_t;
+size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_t sampleCount) {
+
+    // TODO: Add up to sampleCount samples to fingerprint->input (scaled as floating point real data)
+
+    // TODO: When fingerprint->numSamples are present, compute FFT (should a windowing function be used?)
+    minfft_realdft(fingerprint->input, fingerprint->output, fingerprint->aux);
+
+    // TODO: Return the number of samples consumed (use an out variable?)
+
+    // TODO: Set return code if output data is ready (produce magnitude data)
+
+    return 0;
+}
+
+
 
 
 // Process sample data

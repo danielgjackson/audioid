@@ -31,6 +31,15 @@ void AudioIdWaitUntilDone(audioid_t *audioid);
 // Shutdown an audioid object (but do not destroy it), the object can be used again
 void AudioIdShutdown(audioid_t *audioid);
 
+
+// ---
+
+typedef struct fingerprint_tag fingerprint_t;
+
+fingerprint_t *FingerprintCreate(size_t numSamples);
+void FingerprintDestroy(fingerprint_t *fingerprint);
+
+
 #ifdef __cplusplus
 }
 #endif

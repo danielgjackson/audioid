@@ -11,6 +11,7 @@
         "audioid.h": "c",
         "stdio.h": "c",
         "miniaudio.h": "c",
-        "minfft.h": "c"
+        "minfft.h": "c",
+        "dr_wav.h": "c"
     }
 }
