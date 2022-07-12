@@ -1,7 +1,10 @@
 {
     "cSpell.words": [
         "audioid",
+        "minfft",
         "MINIAUDIO",
+        "mkaux",
+        "realdft",
         "Wmaybe"
     ],
     "files.associations": {
