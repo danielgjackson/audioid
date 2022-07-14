@@ -11,27 +11,117 @@
 
 #include "audioid.h"
 
+//#define WINDOW_OVERLAP 2        // <=1 = none, 2 = half
+
+// Hamming window function (http://en.wikipedia.org/wiki/Window_function)
+static double HammingWindow(int index, size_t size)
+{
+    const double weight = 0.53836;  // 25.0/46.0
+	return weight - (1.0 - weight) * cos(2 * M_PI * index / (size - 1));
+}
+
+static unsigned int Lerp(const double *start, const double *end, double proportion) {
+    const double globalScale = 0.5;
+    proportion *= globalScale;
+
+    if (proportion < 0) proportion = 0;
+    if (proportion > 1) proportion = 1;
+
+    // Lerp, clamp and pack
+    unsigned int retVal = 0;
+    for (size_t i = 0; i < 3; i++) {
+        double v = proportion * (end[i] - start[i]) + start[i];
+        if (v < 0) v = 0;
+        if (v > 1) v = 1;
+        retVal |= (unsigned int)(255 * v) << (8 * i);
+    }
+    return retVal;
+}
+
+static unsigned int Gradient(double value) {
+    const double black[3] = { 0, 0, 0 };
+    const double purple[3] = { 0.5, 0, 1 };
+    const double orange[3] = { 1, 0.5, 0 };
+    const double yellow[3] = { 1, 1, 0 };
+    const double white[3] = { 1, 1, 1 };
+
+    double v[3] = {0};
+    if (value <= 0) {           // black
+        return Lerp(black, black, 0);
+    } else if (value < 0.333) { // to dark purple
+        return Lerp(black, purple, (value - 0) * 3);
+    } else if (value < 0.666) {  // to orange
+        return Lerp(purple, orange, (value - 0.333) * 3);
+    } else if (value <= 1)   {  // to yellow
+        return Lerp(orange, yellow, (value - 0.666) * 3);
+    } else {    // saturate to white at 2.0
+        return Lerp(yellow, white, value - 1);
+    }
+}
+
+static void DebugVisualizeValues(double *values, size_t count) {
+    const int mode = 2;    // 0=solid block, 1=left-half block, 2=buffer previous line and upper-half block
+    static double *buffer = NULL;   // horrible hack to buffer previous line so output can be two virtual lines per physical line
+    static size_t bufferSize = 0;
+    static int bufferLine = 0;
+    if (mode == 2 && bufferSize < count) {
+        bufferSize = count;
+        buffer = realloc(buffer, sizeof(double) * bufferSize);
+    }
+    if (mode == 2 && (bufferLine & 1) == 0) {
+        memcpy(buffer, values, sizeof(double) * count);
+    } else {
+        for (size_t x = 0; x < count; x++) {
+            unsigned int c = Gradient(values[x]);
+            if (mode == 1) {
+                if ((x & 1) == 1) {
+                    unsigned int cPrev = Gradient(values[x - 1]);
+                    // Left-half block - Unicode: \u258c - UTF-8: \xe2\x96\x8c
+                    printf("\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u258c", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
+                }
+            } else if (mode == 2) {
+                if ((bufferLine & 1) == 1) {
+                    unsigned int cPrev = Gradient(buffer[x]);
+                    // Upper-half block - Unicode: \u2580 - UTF-8: \xe2\x96\x80
+                    printf("\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u2580", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
+                }
+            } else {
+                // Full Block - Unicode: \u2588 - UTF-8: \xe2\x96\x88
+                printf("\x1b[38;2;%d;%d;%dm\u2588", (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
+            }
+        }        
+        printf("\x1b[0m\n");
+    }
+    bufferLine++;
+}
+
 
 // Fingerprint state
 typedef struct fingerprint_tag {
     size_t maxSamples;
-    size_t countResults; // (maxSamples/2)+1
-    minfft_real *input;
-    minfft_cmpl *output;
-    minfft_aux *aux;
+    size_t countResults;    // (maxSamples/2)+1
+    size_t countBuckets;    // count of buckets to average into
+    double *input;          // user-supplied input, converted to floating point
+    minfft_real *weighted;  // window-weighted values before FFT
+    minfft_cmpl *output;    // complex output of FFT
+    minfft_aux *aux;        // auxillary data needed for FFT
+    double *magnitude;      // magnitude of each output
+    double *buckets;        // mean magnitude into fewer buckets
     size_t sampleOffset;
-    double *magnitude;
 } fingerprint_t;
 
-void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples) {
+void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples, size_t countBuckets) {
     memset(fingerprint, 0, sizeof(*fingerprint));
     fingerprint->maxSamples = maxSamples;
+    fingerprint->countBuckets = countBuckets;
     fingerprint->countResults = (fingerprint->maxSamples / 2) + 1;
     fingerprint->sampleOffset = 0;
-    fingerprint->input = malloc(sizeof(minfft_real) * fingerprint->maxSamples);
-    fingerprint->output = malloc(sizeof(minfft_cmpl) * fingerprint->countResults);
     fingerprint->aux = minfft_mkaux_realdft_1d(fingerprint->maxSamples);
+    fingerprint->input = malloc(sizeof(double) * fingerprint->maxSamples);
+    fingerprint->weighted = malloc(sizeof(minfft_real) * fingerprint->maxSamples);
+    fingerprint->output = malloc(sizeof(minfft_cmpl) * fingerprint->countResults);
     fingerprint->magnitude = malloc(sizeof(double) * fingerprint->countResults);
+    fingerprint->buckets = malloc(sizeof(double) * fingerprint->countBuckets);
 }
 
 void FingerprintDestroy(fingerprint_t *fingerprint) {
@@ -43,6 +133,10 @@ void FingerprintDestroy(fingerprint_t *fingerprint) {
         free(fingerprint->input);
         fingerprint->input = NULL;
     }
+    if (fingerprint->weighted != NULL) {
+        free(fingerprint->weighted);
+        fingerprint->weighted = NULL;
+    }
     if (fingerprint->output != NULL) {
         free(fingerprint->output);
         fingerprint->output = NULL;
@@ -50,6 +144,10 @@ void FingerprintDestroy(fingerprint_t *fingerprint) {
     if (fingerprint->magnitude != NULL) {
         free(fingerprint->magnitude);
         fingerprint->magnitude = NULL;
+    }
+    if (fingerprint->buckets != NULL) {
+        free(fingerprint->buckets);
+        fingerprint->buckets = NULL;
     }
 }
 
@@ -64,16 +162,34 @@ double *FingerprintMagnitude(fingerprint_t *fingerprint, size_t *outCountResults
     }
 }
 
-// Add samples to the buffer, returning the number of samples consumed in this step.  Use FingerprintMagnitude() to check if results are available.
+// If the buffer is full, return the bucket-mean magnitude data and count of results
+double *FingerprintBuckets(fingerprint_t *fingerprint, size_t *outCountResults) {
+    if (fingerprint->sampleOffset >= fingerprint->maxSamples) {
+        if (outCountResults != NULL) *outCountResults = fingerprint->countBuckets;
+        return fingerprint->buckets;
+    } else {
+        if (outCountResults != NULL) *outCountResults = 0;
+        return NULL;
+    }
+}
+
+// Add samples to the buffer, returning the number of samples consumed in this step.  Use FingerprintMagnitude()/FingerprintBuckets() to check if results are available.
 size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_t sampleCount) {
     // Special case: adding no samples does not return as another filled buffer, even if the buffer is currently filled
     if (sampleCount == 0) {
         return 0;
     }
 
-    // If adding to a full buffer, restart the buffer
+    // If adding to a full buffer, restart the buffer -- slide window by half if overlapping
     if (fingerprint->sampleOffset >= fingerprint->maxSamples && sampleCount > 0) {
+#if defined(WINDOW_OVERLAP) && (WINDOW_OVERLAP > 1)
+        size_t offset = fingerprint->maxSamples / WINDOW_OVERLAP;
+        size_t length = fingerprint->maxSamples - offset;
+        memmove(fingerprint->input, fingerprint->input + offset * sizeof(double), length * sizeof(double));
+        fingerprint->sampleOffset = fingerprint->maxSamples * (WINDOW_OVERLAP - 1) / WINDOW_OVERLAP;
+#else
         fingerprint->sampleOffset = 0;
+#endif
     }
 
     // Determine how many of these samples will be used
@@ -82,18 +198,25 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 
     // Add up to sampleCount samples to fingerprint->input (scaled as floating point real data)
     for (size_t i = 0; i < samplesUsed; i++) {
-        fingerprint->input[fingerprint->sampleOffset + i] = (minfft_real)samples[i] / 32768;
+        int index = fingerprint->sampleOffset + i;
+        double value = (double)samples[i] / 32768;
+        fingerprint->input[index] = (double)value;
     }
     fingerprint->sampleOffset += samplesUsed;
 
     // If the buffer has just filled
     if (fingerprint->sampleOffset >= fingerprint->maxSamples && samplesUsed > 0) {
-        // TODO: Should a windowing function be applied to the data?
+        // Window-weight samples for FFT
+        for (size_t i = 0; i < fingerprint->maxSamples; i++) {
+            double weight = HammingWindow(i, fingerprint->maxSamples);
+            double value = weight * fingerprint->input[i];
+            fingerprint->weighted[i] = (minfft_real)value;
+        }
 
         // Compute FFT
-        minfft_realdft(fingerprint->input, fingerprint->output, fingerprint->aux);
+        minfft_realdft(fingerprint->weighted, fingerprint->output, fingerprint->aux);
 
-        // Computer magnitude
+        // Compute magnitude
         for (size_t i = 0; i < fingerprint->countResults; i++) {
             #ifdef complex
                 fingerprint->magnitude[i] = cabs(fingerprint->output[i]);
@@ -103,6 +226,20 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
                 fingerprint->magnitude[i] = sqrt(nr * nr + ni * ni);
             #endif
         }
+
+        // Compute averaged buckets
+        for (size_t i = 0; i < fingerprint->countBuckets; i++) {
+            size_t iStartAt = i * fingerprint->countResults / fingerprint->countBuckets;
+            size_t iEndBefore = (i + 1) * fingerprint->countResults / fingerprint->countBuckets;
+            double mean = 0;
+            for (size_t i = iStartAt; i < iEndBefore; i++) {
+                mean += fingerprint->magnitude[i];
+            }
+            if (iEndBefore > iStartAt) {
+                mean /= iEndBefore - iStartAt;
+            }
+            fingerprint->buckets[i] = mean;
+        }
     }
 
     // Return the number of samples consumed
@@ -110,14 +247,14 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 }
 
 
-
-
 // Detector state
 typedef struct audioid_tag {
     // Configuration
     const char *filename;
     unsigned int sampleRate;
-    double windowSize;      // FFT window size in seconds
+    size_t windowSize;
+    size_t countBuckets;
+    bool verbose;
 
     // Audio device capture
     ma_device_config deviceConfig;
@@ -140,14 +277,15 @@ typedef struct audioid_tag {
 // Process sample data
 static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCount) {
     audioid->totalSamples += sampleCount;
-    printf("SAMPLE-DATA: %zu samples (%zu ms), total %0.2f seconds\n", sampleCount, (1000 * sampleCount / audioid->sampleRate), (double)audioid->totalSamples / audioid->sampleRate);
+    if (audioid->verbose) fprintf(stderr, "SAMPLE-DATA: %zu samples (%zu ms), total %0.2f seconds\n", sampleCount, (1000 * sampleCount / audioid->sampleRate), (double)audioid->totalSamples / audioid->sampleRate);
     size_t offset = 0;
     while (offset < sampleCount) {
         offset += FingerprintAddSamples(&audioid->fingerprint, samples + offset, sampleCount - offset);
         size_t countResults = 0;
-        double *magnitude = FingerprintMagnitude(&audioid->fingerprint, &countResults);
-        if (magnitude != NULL && countResults > 0) {
-            printf(">>> %d results.\n", (int)countResults);
+        double *buckets = FingerprintBuckets(&audioid->fingerprint, &countResults);
+        if (buckets != NULL && countResults > 0) {
+            if (audioid->verbose) fprintf(stderr, ">>> %d results.\n", (int)countResults);
+            DebugVisualizeValues(buckets, countResults);
         }
     }
     return;
@@ -177,9 +315,14 @@ void AudioIdDestroy(audioid_t *audioid) {
 // Initialize an audioid object with a new configuration
 void AudioIdInit(audioid_t *audioid, const char *filename) {
     memset(audioid, 0, sizeof(*audioid));
-    audioid->sampleRate = AUDIOID_SAMPLE_RATE;
-    audioid->windowSize = 0.128; // * 16000 = 2048 samples
     audioid->filename = filename;
+
+    // TODO: Move these to parameters
+    audioid->sampleRate = AUDIOID_SAMPLE_RATE;
+audioid->windowSize = 2048; // 2048 / AUDIOID_SAMPLE_RATE = 0.128s // 1024+1 results
+//audioid->windowSize = 512;
+    audioid->countBuckets = 128;  // average into buckets
+    audioid->verbose = false;
 }
 
 // Start audio processing on an audioid object
@@ -188,8 +331,7 @@ bool AudioIdStart(audioid_t *audioid) {
 
     ma_result result;
 
-    size_t numSamples = (size_t)(audioid->sampleRate * audioid->windowSize);
-    FingerprintInit(&audioid->fingerprint, numSamples);
+    FingerprintInit(&audioid->fingerprint, audioid->windowSize, audioid->countBuckets);
 
     if (audioid->filename != NULL) {
         fprintf(stderr, "AUDIOID: Opening file: %s\n", audioid->filename);
@@ -243,7 +385,7 @@ void AudioIdWaitUntilDone(audioid_t *audioid) {
                 ma_uint64 framesRead = 0;
                 ma_result result = ma_decoder_read_pcm_frames(&audioid->decoder, &samples, MAX_FRAME_COUNT, &framesRead);
                 if (framesRead <= 0) break;
-fprintf(stderr, "READ: %d\n", (int)framesRead);
+                if (audioid->verbose) fprintf(stderr, "READ: %d\n", (int)framesRead);
                 AudioIdProcess(audioid, samples, (size_t)framesRead);
                 if (result != MA_SUCCESS) break;
             }

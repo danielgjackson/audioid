@@ -16,6 +16,11 @@
         "miniaudio.h": "c",
         "minfft.h": "c",
         "dr_wav.h": "c",
-        "__locale": "c"
+        "__locale": "c",
+        "__bit_reference": "c",
+        "bitset": "c",
+        "chrono": "c",
+        "unordered_map": "c",
+        "algorithm": "c"
     }
 }
