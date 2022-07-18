@@ -20,7 +20,7 @@ audioid_t *AudioIdCreate();
 void AudioIdDestroy();
 
 // Initialize an audioid object with a new configuration
-void AudioIdInit(audioid_t *audioid, const char *filename);
+void AudioIdInit(audioid_t *audioid, const char *filename, const char *labelFile);
 
 // Start audio processing on an audioid object
 bool AudioIdStart(audioid_t *audioid);

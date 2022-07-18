@@ -4,6 +4,7 @@
 #elif defined(__clang__)
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 #endif
 
 #define DR_WAV_IMPLEMENTATION

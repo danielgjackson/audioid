@@ -8,7 +8,8 @@
         "mkaux",
         "Mukhin",
         "realdft",
-        "Wmaybe"
+        "Wmaybe",
+        "Wunused"
     ],
     "files.associations": {
         "audioid.h": "c",

@@ -45,7 +45,6 @@ static unsigned int Gradient(double value) {
     const double yellow[3] = { 1, 1, 0 };
     const double white[3] = { 1, 1, 1 };
 
-    double v[3] = {0};
     if (value <= 0) {           // black
         return Lerp(black, black, 0);
     } else if (value < 0.333) { // to dark purple
@@ -251,6 +250,7 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 typedef struct audioid_tag {
     // Configuration
     const char *filename;
+    const char *labelFile;
     unsigned int sampleRate;
     size_t windowSize;
     size_t countBuckets;
@@ -266,12 +266,45 @@ typedef struct audioid_tag {
     ma_decoder decoder;
     bool decoderInitialized;
 
+    // Labels
+    const char **labels;
+    size_t countLabels;
+
     // State
     size_t totalSamples;
 
     fingerprint_t fingerprint;
 } audioid_t;
 
+
+static const char *AudioIdGetLabelName(audioid_t *audioid, size_t id) {
+    if (id >= audioid->countLabels) return NULL;
+    return audioid->labels[id];
+}
+
+static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
+    // Return existing label id
+    for (size_t id = 0; id < audioid->countLabels; id++) {
+        if (strcmp(audioid->labels[id], label) == 0) {
+            return id;
+        }
+    }
+    // Add the label if it is new
+    audioid->labels = (const char **)realloc(audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
+    audioid->labels[audioid->countLabels] = strdup(label);
+    // Return the new label id
+    return ++audioid->countLabels;
+}
+
+static void AudioIdFreeLabels(audioid_t *audioid) {
+    for (size_t id = 0; id < audioid->countLabels; id++) {
+        free((void *)audioid->labels[id]);
+        audioid->labels[id] = NULL;
+    }
+    free(audioid->labels);
+    audioid->labels = NULL;
+    audioid->countLabels = 0;
+}
 
 
 // Process sample data
@@ -302,7 +335,7 @@ static void data_callback(ma_device *device, void *_output, const void *input, m
 audioid_t *AudioIdCreate() {
     audioid_t *audioid = (audioid_t *)malloc(sizeof(audioid_t));
     memset(audioid, 0, sizeof(*audioid));
-    AudioIdInit(audioid, NULL);
+    AudioIdInit(audioid, NULL, NULL);
     return audioid;
 }
 
@@ -313,9 +346,10 @@ void AudioIdDestroy(audioid_t *audioid) {
 }
 
 // Initialize an audioid object with a new configuration
-void AudioIdInit(audioid_t *audioid, const char *filename) {
+void AudioIdInit(audioid_t *audioid, const char *filename, const char *labelFile) {
     memset(audioid, 0, sizeof(*audioid));
     audioid->filename = filename;
+    audioid->labelFile = labelFile;
 
     // TODO: Move these to parameters
     audioid->sampleRate = AUDIOID_SAMPLE_RATE;
@@ -333,8 +367,38 @@ bool AudioIdStart(audioid_t *audioid) {
 
     FingerprintInit(&audioid->fingerprint, audioid->windowSize, audioid->countBuckets);
 
+    if (audioid->labelFile != NULL) {
+        fprintf(stderr, "AUDIOID: Opening label file: %s\n", audioid->labelFile);
+        FILE *fp = fopen(audioid->labelFile, "r");
+        char lineBuffer[256];
+        for (size_t lineNumber = 1; ; lineNumber++) {
+            char *line = fgets(lineBuffer, sizeof(lineBuffer) - 1, fp);
+            if (line == NULL) break;
+            //if (line[0] != '\0' && line[strlen(line) - 1] == '\n') line[strlen(line) - 1] = '\0';
+            //if (line[0] != '\0' && line[strlen(line) - 1] == '\r') line[strlen(line) - 1] = '\0';
+            //fprintf(stderr, "LABEL-LINE: %s", line);
+
+            double start, end;
+            const char *labelString = NULL;
+            const char *token = strtok(line,"\t");
+            if (token != NULL) start = atof(token);
+            token = strtok(NULL, "\t");
+            if (token != NULL) end = atof(token);
+            token = strtok(NULL, "\t\r\n");
+            if (token != NULL) labelString = token;
+
+            if (labelString == NULL) {
+                fprintf(stderr, "ERROR: Labels file line %zu does not contain required values.\n", lineNumber);
+            } else {
+                size_t labelId = AudioIdGetLabelId(audioid, labelString);
+                fprintf(stderr, "LABEL: %zu/%s (%0.2f-%0.2f)\n", labelId, labelString, start, end);
+            }
+        }
+        fclose(fp);
+    }
+
     if (audioid->filename != NULL) {
-        fprintf(stderr, "AUDIOID: Opening file: %s\n", audioid->filename);
+        fprintf(stderr, "AUDIOID: Opening sound file: %s\n", audioid->filename);
 
         audioid->decoderConfig = ma_decoder_config_init(ma_format_s16, 1, audioid->sampleRate);
 
@@ -411,4 +475,5 @@ void AudioIdShutdown(audioid_t *audioid) {
         audioid->decoderInitialized = false;
     }
     FingerprintDestroy(&audioid->fingerprint);
+    AudioIdFreeLabels(audioid);
 }
