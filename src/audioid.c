@@ -11,7 +11,7 @@
 
 #include "audioid.h"
 
-//#define WINDOW_OVERLAP 2        // <=1 = none, 2 = half
+#define WINDOW_OVERLAP 2        // <=1 = none, 2 = half
 
 // Hamming window function (http://en.wikipedia.org/wiki/Window_function)
 static double HammingWindow(int index, size_t size)
@@ -184,8 +184,8 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 #if defined(WINDOW_OVERLAP) && (WINDOW_OVERLAP > 1)
         size_t offset = fingerprint->maxSamples / WINDOW_OVERLAP;
         size_t length = fingerprint->maxSamples - offset;
-        memmove(fingerprint->input, fingerprint->input + offset * sizeof(double), length * sizeof(double));
-        fingerprint->sampleOffset = fingerprint->maxSamples * (WINDOW_OVERLAP - 1) / WINDOW_OVERLAP;
+        memmove(fingerprint->input, fingerprint->input + offset, length * sizeof(double));
+        fingerprint->sampleOffset = length;
 #else
         fingerprint->sampleOffset = 0;
 #endif
@@ -246,6 +246,13 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 }
 
 
+typedef struct interval_tag {
+    int id;
+    double start;
+    double end;
+} interval_t;
+
+
 // Detector state
 typedef struct audioid_tag {
     // Configuration
@@ -270,12 +277,16 @@ typedef struct audioid_tag {
     const char **labels;
     size_t countLabels;
 
+    // Intervals
+    interval_t *intervals;
+    size_t maxIntervals;
+    size_t countIntervals;
+
     // State
     size_t totalSamples;
 
     fingerprint_t fingerprint;
 } audioid_t;
-
 
 static const char *AudioIdGetLabelName(audioid_t *audioid, size_t id) {
     if (id >= audioid->countLabels) return NULL;
@@ -305,6 +316,29 @@ static void AudioIdFreeLabels(audioid_t *audioid) {
     audioid->labels = NULL;
     audioid->countLabels = 0;
 }
+
+
+
+static size_t AudioIdAddInterval(audioid_t *audioid, const char *label, double start, double end) {
+    // Allocate more space
+    if (audioid->countIntervals >= audioid->maxIntervals) {
+        audioid->maxIntervals += audioid->maxIntervals + 1;
+        audioid->intervals = (interval_t *)realloc(audioid->intervals, sizeof(interval_t) * audioid->maxIntervals);
+    }
+    interval_t *newInterval = &audioid->intervals[audioid->countIntervals++];
+    memset(newInterval, 0, sizeof(*newInterval));
+    newInterval->id = AudioIdGetLabelId(audioid, label);
+    newInterval->start = start;
+    newInterval->end = end;
+    if (audioid->countIntervals > 1 && start < audioid->intervals[audioid->countIntervals - 2].end) {
+        fprintf(stderr, "WARNING: Interval #%zu starts (%0.2f) before the previous interval ends (%0.2f).\n", audioid->countIntervals, start, audioid->intervals[audioid->countIntervals - 1].end);
+    }
+    if (end < start) {
+        fprintf(stderr, "WARNING: Interval #%zu ends (%0.2f) before it starts (%0.2f).\n", audioid->countIntervals, end, start);
+    }
+    return audioid->countIntervals - 1;
+}
+
 
 
 // Process sample data
@@ -390,11 +424,16 @@ bool AudioIdStart(audioid_t *audioid) {
             if (labelString == NULL) {
                 fprintf(stderr, "ERROR: Labels file line %zu does not contain required values.\n", lineNumber);
             } else {
-                size_t labelId = AudioIdGetLabelId(audioid, labelString);
-                fprintf(stderr, "LABEL: %zu/%s (%0.2f-%0.2f)\n", labelId, labelString, start, end);
+                AudioIdAddInterval(audioid, labelString, start, end);
             }
         }
         fclose(fp);
+
+        for (size_t i = 0; i < audioid->countIntervals; i++) {
+            interval_t *interval = &audioid->intervals[i];
+            fprintf(stderr, "INTERVAL: #%zu %d/%s (%0.2f-%0.2f)\n", i + 1, interval->id, AudioIdGetLabelName(audioid, interval->id), interval->start, interval->end);
+        }
+
     }
 
     if (audioid->filename != NULL) {
