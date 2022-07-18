@@ -1,8 +1,12 @@
 // AudioId - Daniel Jackson, 2022.
 
+// TODO: Divide into components with smaller responsibilities.
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+#define _USE_MATH_DEFINES
 #include <math.h>
 
 #include "miniaudio.h"
@@ -109,7 +113,7 @@ static unsigned int Gradient(double value) {
 
 static void DebugVisualizeValues(double *values, size_t count) {
     const int mode = 2;    // 0=solid block, 1=left-half block, 2=buffer previous line and upper-half block
-    static double *buffer = NULL;   // horrible hack to buffer previous line so output can be two virtual lines per physical line
+    static double *buffer = NULL;   // horrible (non-threadsafe) hack to buffer previous line so output can be two virtual lines per physical line
     static size_t bufferSize = 0;
     static int bufferLine = 0;
     if (mode == 2 && bufferSize < count) {
@@ -125,17 +129,17 @@ static void DebugVisualizeValues(double *values, size_t count) {
                 if ((x & 1) == 1) {
                     unsigned int cPrev = Gradient(values[x - 1]);
                     // Left-half block - Unicode: \u258c - UTF-8: \xe2\x96\x8c
-                    printf("\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u258c", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
+                    printf(u8"\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u258c", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
                 }
             } else if (mode == 2) {
                 if ((bufferLine & 1) == 1) {
                     unsigned int cPrev = Gradient(buffer[x]);
                     // Upper-half block - Unicode: \u2580 - UTF-8: \xe2\x96\x80
-                    printf("\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u2580", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
+                    printf(u8"\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u2580", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
                 }
             } else {
                 // Full Block - Unicode: \u2588 - UTF-8: \xe2\x96\x88
-                printf("\x1b[38;2;%d;%d;%dm\u2588", (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
+                printf(u8"\x1b[38;2;%d;%d;%dm\u2588", (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
             }
         }        
         printf("\x1b[0m\n");
@@ -356,7 +360,7 @@ fprintf(stderr, "LABEL: ...found at: %d\n",  (int)id);
         }
     }
     // Add the label if it is new
-    audioid->labels = (const char **)realloc(audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
+    audioid->labels = (const char **)realloc((void *)audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
     audioid->labels[audioid->countLabels] = strdup(label);
 fprintf(stderr, "LABEL: ...added new at: %d\n",  (int)audioid->countLabels);
     // Return the new label id
@@ -370,7 +374,7 @@ static void AudioIdFreeLabels(audioid_t *audioid) {
         free(audioid->stats[id]);
         audioid->stats[id] = NULL;
     }
-    free(audioid->labels);
+    free((void *)audioid->labels);
     free(audioid->stats);
     audioid->labels = NULL;
     audioid->countLabels = 0;

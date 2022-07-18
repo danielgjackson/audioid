@@ -9,6 +9,12 @@
 extern "C" {
 #endif
 
+#ifdef _MSC_VER // [dgj]
+  #ifdef complex
+    #undef complex
+  #endif
+#endif
+
 #ifdef complex
 // use C99 complex
 #if MINFFT_SINGLE

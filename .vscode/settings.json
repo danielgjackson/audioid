@@ -22,6 +22,9 @@
         "bitset": "c",
         "chrono": "c",
         "unordered_map": "c",
-        "algorithm": "c"
+        "algorithm": "c",
+        "string.h": "c",
+        "math.h": "c",
+        "complex.h": "c"
     }
 }
