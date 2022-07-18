@@ -9,8 +9,6 @@ extern "C" {
 
 #include <stdbool.h>
 
-#define AUDIOID_SAMPLE_RATE 16000
-
 typedef struct audioid_tag audioid_t;
 
 // Allocate an audioid object, this will also initialize the object.
