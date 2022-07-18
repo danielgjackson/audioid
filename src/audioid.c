@@ -331,6 +331,7 @@ typedef struct audioid_tag {
     interval_t *intervals;
     size_t maxIntervals;
     size_t countIntervals;
+    interval_t *lastInterval;
     size_t nextInterval;
 
     // State
@@ -429,12 +430,21 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                     }
                     // After the next interval
                     audioid->nextInterval++;
-                    if (audioid->verbose || true) {
-                        if (audioid->nextInterval < audioid->countIntervals) {
-                            fprintf(stderr, "--- INTERVAL #%d: %s ---\n", (int)audioid->nextInterval, AudioIdGetLabelName(audioid, audioid->intervals[audioid->nextInterval].id));
-                        }
+                }
+            }
+
+            // Interval boundary
+            if (audioid->lastInterval != interval) {
+                if (audioid->verbose || true) {
+                    if (audioid->lastInterval != NULL) {
+                        fprintf(stderr, "--- END INTERVAL ---\n");
+                    }
+
+                    if (interval != NULL) {
+                        fprintf(stderr, "--- @%.2f INTERVAL #%d (%.2f-%.2f): %s ---\n", time, (int)audioid->nextInterval, audioid->intervals[audioid->nextInterval].start, audioid->intervals[audioid->nextInterval].end, AudioIdGetLabelName(audioid, audioid->intervals[audioid->nextInterval].id));
                     }
                 }
+                audioid->lastInterval = interval;
             }
 
             // Add stats to current interval
