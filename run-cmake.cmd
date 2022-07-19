@@ -44,9 +44,6 @@ cmake --build build
 IF ERRORLEVEL 1 GOTO ERROR
 ECHO Done.
 
-rem UTF-8
-chcp 65001
-
 echo Executable:  build\src\Debug\audioid.exe
 build\src\Debug\audioid.exe %*
 

@@ -316,6 +316,7 @@ typedef struct audioid_tag {
     // Configuration
     const char *filename;
     const char *labelFile;
+
     unsigned int sampleRate;
     size_t windowSize;
     size_t countBuckets;

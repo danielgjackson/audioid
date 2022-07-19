@@ -39,12 +39,9 @@ ECHO Compiling...
 cl %NOLOGO% -c /EHsc /DUNICODE /D_UNICODE /UTF-8 /Tc"src\main.c" /Tc"src\audioid.c" /Tc"src\minfft.c" /Tc"src\miniaudio.c"
 IF ERRORLEVEL 1 GOTO ERROR
 ECHO Linking...
-link %NOLOGO% /out:audioid.exe main audioid minfft miniaudio /subsystem:console
+link %NOLOGO% /subsystem:console /out:audioid.exe main audioid minfft miniaudio
 IF ERRORLEVEL 1 GOTO ERROR
 ECHO Done.
-
-rem UTF-8
-chcp 65001
 
 IF DEFINED INTERACTIVE_BUILD COLOR 2F & PAUSE & COLOR
 GOTO :EOF
