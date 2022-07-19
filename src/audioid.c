@@ -30,46 +30,48 @@
 
 // Reduced loss of precision for running stats, informed by: https://www.johndcook.com/blog/standard_deviation/
 typedef struct {
-	unsigned int n;
-	double newM, newS, oldM, oldS, min, max;
+	unsigned int count;
+	double mean, sumVar;
+    //double min, max;
 } running_stats_t;
 void running_stats_clear(running_stats_t *self) {
-	self->n = 0;
+	self->count = 0;
 }
 void running_stats_add(running_stats_t *self, double x) {
-	self->n++;
-	if (self->n == 1) {
-		self->newM = x;
-		self->newS = 0;
-		self->min = x;
-		self->max = x;
+    double newMean, newSumVar;
+	self->count++;
+	if (self->count == 1) {
+		newMean = x;
+		newSumVar = 0;
+		// self->min = x;
+		// self->max = x;
 	} else {
-		self->newM = self->oldM + (x - self->oldM) / self->n;
-		self->newS = self->oldS + (x - self->oldM) * (x - self->newM);
+		newMean = self->mean + (x - self->mean) / self->count;
+		newSumVar = self->sumVar + (x - self->mean) * (x - newMean);
 	}
-	if (x < self->min) self->min = x;
-	if (x > self->max) self->max = x;
-	self->oldM = self->newM;
-    self->oldS = self->newS;
+	self->mean = newMean;
+    self->sumVar = newSumVar;
+	// if (x < self->min) self->min = x;
+	// if (x > self->max) self->max = x;
 }
 unsigned int running_stats_count(running_stats_t *self) {
-	return self->n;
+	return self->count;
 }
 double running_stats_mean(running_stats_t *self) {
-	if (self->n == 0) return 0;
-	return self->newM;
+	if (self->count == 0) return 0;
+	return self->mean;
 }
 double running_stats_variance(running_stats_t *self) {
-	if (self->n <= 1) return 0;
-	return self->newS / (self->n - 1);
+	if (self->count <= 1) return 0;
+	return self->sumVar / (self->count - 1);
 }
 double running_stats_stddev(running_stats_t *self) {
 	return sqrt(running_stats_variance(self));
 }
-double running_stats_range(running_stats_t *self) {
-	if (self->n == 0) return 0;
-	return self->max - self->min;
-}
+// double running_stats_range(running_stats_t *self) {
+// 	if (self->count == 0) return 0;
+// 	return self->max - self->min;
+// }
 
 
 // Hamming window function (http://en.wikipedia.org/wiki/Window_function)
@@ -116,7 +118,7 @@ static unsigned int Gradient(double value) {
     }
 }
 
-static void DebugVisualizeValues(double *values, size_t count) {
+static void DebugVisualizeValues(double *values, size_t count, bool showMatch, const char *intervalLabel, const char *closestLabel, double closestDistance) {
     const int mode = 2;    // 0=solid block, 1=left-half block, 2=buffer previous line and upper-half block
     static double *buffer = NULL;   // horrible (non-threadsafe) hack to buffer previous line so output can be two virtual lines per physical line
     static size_t bufferSize = 0;
@@ -147,8 +149,21 @@ static void DebugVisualizeValues(double *values, size_t count) {
                 printf(u8"\x1b[38;2;%d;%d;%dm\u2588", (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
             }
         }        
-        printf("\x1b[0m\n");
+        printf("\x1b[0m");
+        if (showMatch) {
+            const char *result = "";
+            if (intervalLabel != NULL) {
+                if (closestLabel == NULL || strcmp(intervalLabel, closestLabel) != 0) {
+                    result = "\x1b[31m"; // "XXX";
+                } else {
+                    result = "\x1b[32m"; // "!!!";
+                }
+            }
+            printf(" %s%s %0.3f\x1b[0m", result, closestLabel ? closestLabel : "-", closestDistance);
+        }
+        printf("\n");
     }
+    fflush(stdout);
     bufferLine++;
 }
 
@@ -303,6 +318,19 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
     return samplesUsed;
 }
 
+double FingerprintDistance(fingerprint_t *fingerprint, running_stats_t *stats) {
+    double totalDistance = 0;
+    for (size_t i = 0; i < fingerprint->countBuckets; i++) {
+        double mean0 = running_stats_mean(&stats[i]);
+        double mean1 = fingerprint->buckets[i];
+        double diff = mean1 - mean0;
+        double dist = diff * diff;
+        totalDistance += dist;
+    }
+    double result = totalDistance / fingerprint->countBuckets;
+    return result;
+}
+
 
 typedef struct interval_tag {
     size_t id;      // label id for this interval
@@ -321,6 +349,8 @@ typedef struct audioid_tag {
     size_t windowSize;
     size_t countBuckets;
     bool verbose;
+    bool visualize;
+    bool learn;
 
     // Audio device capture
     ma_device_config deviceConfig;
@@ -357,18 +387,24 @@ static const char *AudioIdGetLabelName(audioid_t *audioid, size_t id) {
 }
 
 static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
-fprintf(stderr, "LABEL: Searching: '%s'\n", label);
     // Return existing label id
     for (size_t id = 0; id < audioid->countLabels; id++) {
         if (strcmp(audioid->labels[id], label) == 0) {
-fprintf(stderr, "LABEL: ...found at: %d\n",  (int)id);
             return id;
         }
     }
-    // Add the label if it is new
+
+    // Add the new label
     audioid->labels = (const char **)realloc((void *)audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
     audioid->labels[audioid->countLabels] = strdup(label);
-fprintf(stderr, "LABEL: ...added new at: %d\n",  (int)audioid->countLabels);
+
+    // Allocate memory for per-label stats
+    audioid->stats = (running_stats_t **)realloc(audioid->stats, sizeof(running_stats_t *) * (audioid->countLabels + 1));
+    audioid->stats[audioid->countLabels] = (running_stats_t *)malloc(sizeof(running_stats_t) * audioid->countBuckets);
+    for (size_t i = 0; i < audioid->countBuckets; i++) {
+        running_stats_clear(&audioid->stats[audioid->countLabels][i]);
+    }
+
     // Return the new label id
     return audioid->countLabels++;
 }
@@ -447,11 +483,11 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             if (audioid->lastInterval != interval) {
                 if (audioid->verbose || true) {
                     if (audioid->lastInterval != NULL) {
-                        fprintf(stderr, "--- END INTERVAL ---\n");
+                        fprintf(stderr, "\n--- END INTERVAL ---\n");
                     }
 
                     if (interval != NULL) {
-                        fprintf(stderr, "--- @%.2f INTERVAL #%d (%.2f-%.2f): %s ---\n", time, (int)audioid->nextInterval, audioid->intervals[audioid->nextInterval].start, audioid->intervals[audioid->nextInterval].end, AudioIdGetLabelName(audioid, audioid->intervals[audioid->nextInterval].id));
+                        fprintf(stderr, "\n--- @%.2f INTERVAL #%d (%.2f-%.2f): %s ---\n", time, (int)audioid->nextInterval, audioid->intervals[audioid->nextInterval].start, audioid->intervals[audioid->nextInterval].end, AudioIdGetLabelName(audioid, audioid->intervals[audioid->nextInterval].id));
                     }
                 }
                 audioid->lastInterval = interval;
@@ -466,9 +502,30 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                 }
             }
 
+            // Recognition mode
+            const char *closestLabel = NULL;
+            double closestDistance = 0;
+            if (!audioid->learn) {
+                for (size_t id = 0; id < audioid->countLabels; id++) {
+                    running_stats_t *stats = audioid->stats[id];
+                    double distance = FingerprintDistance(&audioid->fingerprint, stats);
+                    if (closestLabel == NULL || distance < closestDistance) {
+                        closestLabel = audioid->labels[id];
+                        closestDistance = distance;
+                    }
+                }
+                if (!audioid->visualize) {
+                    fprintf(stdout, "%f %s %f\n", time, closestLabel ? closestLabel : "-", closestDistance);
+                    fflush(stdout);
+                }
+            }
+
             // Output
             if (audioid->verbose) fprintf(stderr, ">>> %d results.\n", (int)countResults);
-            DebugVisualizeValues(buckets, countResults);
+            if (audioid->visualize) {
+if (audioid->learn || audioid->labelFile == NULL || interval != NULL) // only output labelled regions
+                DebugVisualizeValues(buckets, countResults, !audioid->learn, interval != NULL ? audioid->labels[interval->id] : NULL, closestLabel, closestDistance);
+            }
         }
     }
     return;
@@ -484,8 +541,7 @@ static void data_callback(ma_device *device, void *_output, const void *input, m
 // Allocate an audioid object, this will also initialize the object.
 audioid_t *AudioIdCreate() {
     audioid_t *audioid = (audioid_t *)malloc(sizeof(audioid_t));
-    memset(audioid, 0, sizeof(*audioid));
-    AudioIdInit(audioid, NULL, NULL);
+    AudioIdInit(audioid, false);
     return audioid;
 }
 
@@ -495,25 +551,34 @@ void AudioIdDestroy(audioid_t *audioid) {
     free(audioid);
 }
 
-// Initialize an audioid object with a new configuration
-void AudioIdInit(audioid_t *audioid, const char *filename, const char *labelFile) {
+// Initialize an audioid object with an empty configuration
+void AudioIdInit(audioid_t *audioid, bool visualize) {
     memset(audioid, 0, sizeof(*audioid));
-    audioid->filename = filename;
-    audioid->labelFile = labelFile;
 
     // TODO: Move these to parameters
     audioid->sampleRate = AUDIOID_SAMPLE_RATE;
     audioid->windowSize = FFT_WINDOW_SIZE; // 2048 / AUDIOID_SAMPLE_RATE = 0.128s // 1024+1 results
     audioid->countBuckets = FFT_BUCKET_COUNT; // 128
     audioid->verbose = AUDIOID_VERBOSE;
+    audioid->visualize = visualize;
+}
 
+// Configure to learn from labelled audio
+void AudioIdConfigLearn(audioid_t *audioid, const char *filename, const char *labelFile) {
+    audioid->learn = true;
+    audioid->filename = filename;
+    audioid->labelFile = labelFile;
+}
 
+// Configure to recognize from audio -- optionally pre-recoded audio from a file, live captured audio otherwise; optionally with labels for diagnostic use
+void AudioIdConfigRecognize(audioid_t *audioid, const char *filename, const char *labelFile) {
+    audioid->learn = false;
+    audioid->filename = filename;
+    audioid->labelFile = labelFile;
 }
 
 // Start audio processing on an audioid object
 bool AudioIdStart(audioid_t *audioid) {
-    AudioIdShutdown(audioid);
-
     ma_result result;
 
     FingerprintInit(&audioid->fingerprint, audioid->windowSize, audioid->countBuckets);
@@ -525,9 +590,6 @@ bool AudioIdStart(audioid_t *audioid) {
         for (size_t lineNumber = 1; ; lineNumber++) {
             char *line = fgets(lineBuffer, sizeof(lineBuffer) - 1, fp);
             if (line == NULL) break;
-            //if (line[0] != '\0' && line[strlen(line) - 1] == '\n') line[strlen(line) - 1] = '\0';
-            //if (line[0] != '\0' && line[strlen(line) - 1] == '\r') line[strlen(line) - 1] = '\0';
-            //fprintf(stderr, "LABEL-LINE: %s", line);
 
             double start, end;
             const char *labelString = NULL;
@@ -545,15 +607,6 @@ bool AudioIdStart(audioid_t *audioid) {
             }
         }
         fclose(fp);
-
-        // Allocate memory for stats (one per label)
-        audioid->stats = (running_stats_t **)malloc(audioid->countLabels * sizeof(running_stats_t *));
-        for (size_t i = 0; i < audioid->countLabels; i++) {
-            audioid->stats[i] = (running_stats_t *)malloc(sizeof(running_stats_t) * audioid->countBuckets);
-            for (size_t j = 0; j < audioid->countBuckets; j++) {
-                running_stats_clear(&audioid->stats[i][j]);
-            }
-        }
 
         // Display intervals
         for (size_t i = 0; i < audioid->countIntervals; i++) {
@@ -573,7 +626,6 @@ bool AudioIdStart(audioid_t *audioid) {
             return false;
         }
         audioid->decoderInitialized = true;
-        return true;
     } else {
         fprintf(stderr, "AUDIOID: Configuring audio capture...\n");
 
@@ -599,9 +651,8 @@ bool AudioIdStart(audioid_t *audioid) {
 
         fprintf(stderr, "AUDIOID: ...audio capture configured.\n");
         audioid->deviceInitialized = true;
-
-        return true;
     }
+    return true;
 }
 
 // Wait until audio processing has completed
@@ -625,6 +676,162 @@ void AudioIdWaitUntilDone(audioid_t *audioid) {
             getchar();
         }
     }
+}
+
+// Load state
+bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
+    int errors = 0;
+
+    FILE *fp = fopen(filename, "rt");
+    if (!fp) {
+        fprintf(stderr, "ERROR: Problem opening state file for reading: %s\n", filename);
+        return false;
+    }
+
+    bool globalSection = true;
+    size_t labelId = -1;
+    const size_t bufferSize = 65536;
+    char *buffer = (char *)malloc(bufferSize);
+    if (!buffer) {
+        fprintf(stderr, "ERROR: Problem allocating memory for reading: %zu\n", bufferSize);
+        fclose(fp);
+        return false;
+    }
+
+    for (size_t lineNumber = 1; ; lineNumber++) {
+        // Read next line
+        char *line = fgets(buffer, bufferSize - 1, fp);
+        buffer[bufferSize - 1] = '\0';
+
+        // EOF (or read error)
+        if (line == NULL) break;
+
+        // Trim trailing whitespace
+        for (char *end = line + strlen(line); end > line && (*(end - 1) == '\n' || *(end - 1) == '\r' || *(end - 1) == ' '); end--) *(end - 1) = '\0';
+
+        // Empty line
+        if (line[0] == '\0') continue;
+
+        // Comment line
+        if (line[0] == '#') continue;
+
+        // Label section
+        if (line[0] == '[') {
+            if (line[1] == ']') {
+                globalSection = true;
+            } else {
+                char *label = strtok(line + 1, "]\r\n");
+                labelId = AudioIdGetLabelId(audioid, label);
+                globalSection = false;
+            }
+            continue;
+        }
+
+        // Split into name/value pair
+        static char *empty = "";
+        const char *name = line;
+        char *value = empty;
+        char *equals = strchr(line, '=');
+        if (equals != NULL) {
+            *equals = '\0';
+            value = equals + 1;
+            // Trim space either side of the equals
+            for (char *p = equals; p > line && *(p - 1) == ' '; p--) *(p - 1) = '\0'; 
+            for (char *p = equals + 1; *p == ' '; p++) { *p = '\0'; value = p + 1; }
+            // Trim quotes
+            if (value[0] == '\"') value++;
+            if (value[0] == '\0' && value[strlen(value) - 1] == '\"') value[strlen(value) - 1] = '\0';
+        }
+
+        if (globalSection) {
+            if (strcmp(name, "bucketcount") == 0) {
+                size_t bucketCount = (size_t)atoi(value);
+                if (bucketCount != audioid->countBuckets) {
+                    fprintf(stderr, "ERROR: State file was saved with a different bucket count (%zu) to this program (%zu) and is not compatible: %s\n", bucketCount, audioid->countBuckets, filename);
+                    errors++;
+                }
+            } else {
+                fprintf(stderr, "ERROR: Problem reading state file %s global-section line %zu unrecognized name: %s\n", filename, lineNumber, name);
+                errors++;
+            }
+        } else {
+            if (strcmp(name, "stats") == 0) {
+                // Read stats
+                size_t index = 0;
+                char *stat = value;
+                for (;;) {
+                    // Trim and find end of token
+                    while (*stat == ' ') stat++;
+                    if (*stat == '\0') break;
+                    char *end = strchr(stat, ';');
+                    if (end != NULL) { *end = '\0'; }
+
+                    char *count = strtok(stat, " ");
+                    char *mean = strtok(NULL, " ");
+                    char *sumVar = strtok(NULL, " ");
+                    if (count != NULL && mean != NULL && sumVar != NULL) {
+                        if (index < audioid->countBuckets) {
+                            running_stats_t *stats = &audioid->stats[labelId][index];
+                            stats->count = atoi(count);
+                            stats->mean = atoi(mean);
+                            stats->sumVar = atoi(sumVar);
+                        } else {
+                            fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat index %zu exceeds bucket count %zu: %s\n", filename, audioid->labels[labelId], lineNumber, index, audioid->countBuckets, name);
+                            errors++;
+                        }
+                        index++;
+                    } else {
+                        fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu malformed stat at index %zu: %s\n", filename, audioid->labels[labelId], lineNumber, index, name);
+                        errors++;
+                    }
+
+                    // Next token
+                    if (!end) break;
+                    stat = end + 1; 
+                }
+                
+                if (index != audioid->countBuckets) {
+                    fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat count %zu does not equal bucket count %zu: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, index, audioid->countBuckets, name);
+                    errors++;
+                }
+            } else {
+                fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu unrecognized name: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, name);
+                errors++;
+            }
+        }
+    }
+    free(buffer);
+    fclose(fp);
+    return (errors == 0);
+}
+
+// Save state
+bool AudioIdStateSave(audioid_t *audioid, const char *filename) {
+    FILE *fp = fopen(filename, "wt");
+    if (!fp) {
+        fprintf(stderr, "ERROR: Problem opening state file for writing: %s\n", filename);
+        return false;
+    }
+
+    fprintf(fp, "# AudioID state file -- this file will be overwritten if the --write-state option is used\n");
+    fprintf(fp, "\n");
+    fprintf(fp, "bucketcount = %zu\n", audioid->countBuckets);
+    fprintf(fp, "\n");
+    for (size_t id = 0; id < audioid->countLabels; id++) {
+        fprintf(fp, "[%s]\n", audioid->labels[id]);
+
+        fprintf(fp, "stats = \"");
+        for (size_t i = 0; i < audioid->countBuckets; i++) {
+            running_stats_t *stats = &audioid->stats[id][i];
+            fprintf(fp, "%s%u %f %f", i == 0 ? "" : "; ", stats->count, stats->mean, stats->sumVar);
+        }
+        fprintf(fp, "\"\n");
+
+        fprintf(fp, "\n");
+    }
+
+    fclose(fp);
+    return true;
 }
 
 // Shutdown an audioid object (but do not destroy it), the object can be used again

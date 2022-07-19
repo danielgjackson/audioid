@@ -9,27 +9,48 @@
 
 #include "audioid.h"
 
-int run(const char *filename, const char *stateFile, const char *labelFile, const char *outputStateFile) {
+const bool debugFlow = !false;
+
+int run(const char *filename, bool visualize, bool learn, const char *stateFile, const char *labelFile, const char *outputStateFile) {
+if (debugFlow) fprintf(stderr, "Create...\n");
     audioid_t *audioid = AudioIdCreate();
 
-    AudioIdInit(audioid, filename, labelFile);
+if (debugFlow) fprintf(stderr, "Init...\n");
+    AudioIdInit(audioid, visualize);
 
-// Learn
-if (labelFile != NULL) {
-//    if (stateFile != NULL) AudioIdStateLoad(stateFile);
-}
+    // Load state
+    if (stateFile != NULL) {
+if (debugFlow) fprintf(stderr, "Load...\n");
+        AudioIdStateLoad(audioid, stateFile);
+    }
 
+    // Configure
+    if (learn) {
+        // Configure to learn from labelled audio
+if (debugFlow) fprintf(stderr, "Learning...\n");
+        AudioIdConfigLearn(audioid, filename, labelFile);
+    } else {
+        // Configure to recognize from audio -- optionally pre-recoded audio from a file, live captured audio otherwise.
+if (debugFlow) fprintf(stderr, "Recognizing...\n");
+        AudioIdConfigRecognize(audioid, filename, labelFile);
+    }
+
+    // Start processing
+if (debugFlow) fprintf(stderr, "Start...\n");
     AudioIdStart(audioid);
 
+    // Block until completed
+if (debugFlow) fprintf(stderr, "Wait...\n");
     AudioIdWaitUntilDone(audioid);
+if (debugFlow) fprintf(stderr, "Done!\n");
 
-// if (outputStateFile != NULL) AudioIdStateSave(outputStateFile);
+    // Save state
+    if (outputStateFile != NULL) {
+if (debugFlow) fprintf(stderr, "Saving...\n");
+        AudioIdStateSave(audioid, outputStateFile);
+    }
 
-// Recognize
-if (labelFile == NULL) {
-    
-}
-
+if (debugFlow) fprintf(stderr, "Shutdown...\n");
     AudioIdShutdown(audioid);
 
     AudioIdDestroy(audioid);
@@ -45,6 +66,8 @@ int main(int argc, char *argv[]) {
     const char *labelFile = NULL;
     const char *stateFile = NULL;
     const char *outputStateFile = NULL;
+    bool visualize = false;
+    bool learn = false;
 
     #ifdef _WIN32
         SetConsoleOutputCP(65001);    // CP_UTF8 65001
@@ -54,17 +77,19 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (allowFlags && strcmp(argv[i], "--") == 0) { allowFlags = false; }
         else if (allowFlags && strcmp(argv[i], "--help") == 0) { help = true; }
+        else if (allowFlags && strcmp(argv[i], "--visualize") == 0) { visualize = true; }
+        else if (allowFlags && strcmp(argv[i], "--learn") == 0) { learn = true; }
         else if (allowFlags && strcmp(argv[i], "--state") == 0) {
             if (i + 1 < argc) { stateFile = argv[++i]; }
-            else { printf("ERROR: State file not specified\n"); help = true; }
+            else { printf("ERROR: Missing parameter value for: --state\n"); help = true; }
         }
-        else if (allowFlags && strcmp(argv[i], "--learn-labels") == 0) {
+        else if (allowFlags && strcmp(argv[i], "--labels") == 0) {
             if (i + 1 < argc) { labelFile = argv[++i]; }
-            else { printf("ERROR: Label file not specified\n"); help = true; }
+            else { printf("ERROR: Missing parameter value for: --labels\n"); help = true; }
         }
         else if (allowFlags && strcmp(argv[i], "--write-state") == 0) {
             if (i + 1 < argc) { outputStateFile = argv[++i]; }
-            else { printf("ERROR: Write state file not specified\n"); help = true; }
+            else { printf("ERROR: Missing parameter value for: --write-state\n"); help = true; }
         }
         else if (allowFlags && argv[i][0] == '-') {
             printf("ERROR: Unknown flag: %s\n", argv[i]);
@@ -83,11 +108,11 @@ int main(int argc, char *argv[]) {
     if (help) {
         printf("AudioID - Daniel Jackson, 2022.\n");
         printf("\n");
-        printf("Usage:  audioid [--state state.txt] [sound.wav] [--learn-labels sound.txt] [--write-state state.txt]\n");
+        printf("Usage:  audioid [--state state.ini] [--visualize] [sound.wav] [--labels sound.txt [--learn [--write-state state.ini]]]\n");
         printf("\n");
         return 1;
     }
 
-    int returnValue = run(filename, stateFile, labelFile, outputStateFile);
+    int returnValue = run(filename, visualize, learn, stateFile, labelFile, outputStateFile);
     return returnValue;
 }
