@@ -8,7 +8,7 @@ add_executable(audioid
 )
 
 target_include_directories(audioid PRIVATE
-  .
+	.
 )
 
 if(NOT WIN32)
@@ -17,4 +17,6 @@ if(NOT WIN32)
 		pthread
 		dl
 	)
+elseif(WIN32)
+	add_compile_options(/utf-8)
 endif()

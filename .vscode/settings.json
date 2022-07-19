@@ -7,6 +7,7 @@
         "MINIAUDIO",
         "mkaux",
         "Mukhin",
+        "NONSTDC",
         "realdft",
         "Wmaybe",
         "Wunused"
@@ -25,6 +26,7 @@
         "algorithm": "c",
         "string.h": "c",
         "math.h": "c",
-        "complex.h": "c"
+        "complex.h": "c",
+        "stdint.h": "c"
     }
 }

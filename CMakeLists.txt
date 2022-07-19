@@ -1,6 +1,5 @@
-# [ "$(basename $(pwd))" != "build" ] && ( [ -d build ] || mkdir build ) && cd build; cmake ..
-# [ "$(basename $(pwd))" != "build" ] && cd build; cmake --build .
-# [ "$(basename $(pwd))" != "build" ] && cd build; src/audioid
+# ( [ -f build/CMakeCache.txt ] || cmake -Bbuild ) && cmake --build build
+# build/src/audioid
 
 cmake_minimum_required(VERSION 3.10)
 

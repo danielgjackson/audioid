@@ -28,6 +28,11 @@ int main(int argc, char *argv[]) {
     const char *filename = NULL;
     const char *labelFile = NULL;
 
+    #ifdef _WIN32
+        SetConsoleOutputCP(65001);    // CP_UTF8 65001
+        setvbuf(stdout, NULL, _IOFBF, 1024);
+    #endif
+
     for (int i = 1; i < argc; i++) {
         if (allowFlags && strcmp(argv[i], "--") == 0) { allowFlags = false; }
         else if (allowFlags && strcmp(argv[i], "--help") == 0) { help = true; }

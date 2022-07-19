@@ -2,11 +2,16 @@
 
 // TODO: Divide into components with smaller responsibilities.
 
+#ifdef _MSC_VER // [dgj]
+    #define _CRT_SECURE_NO_WARNINGS     // fopen / strtok
+    #define _CRT_NONSTDC_NO_DEPRECATE   // strdup
+    #define _USE_MATH_DEFINES
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#define _USE_MATH_DEFINES
 #include <math.h>
 
 #include "miniaudio.h"
@@ -68,7 +73,7 @@ double running_stats_range(running_stats_t *self) {
 
 
 // Hamming window function (http://en.wikipedia.org/wiki/Window_function)
-static double HammingWindow(int index, size_t size) {
+static double HammingWindow(size_t index, size_t size) {
     const double weight = HAMMING_WEIGHT;   // 0.53836;  // 25.0/46.0
 	return weight - (1.0 - weight) * cos(2 * M_PI * index / (size - 1));
 }
@@ -168,7 +173,7 @@ void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples, size_t count
     fingerprint->countBuckets = countBuckets;
     fingerprint->countResults = (fingerprint->maxSamples / 2) + 1;
     fingerprint->sampleOffset = 0;
-    fingerprint->aux = minfft_mkaux_realdft_1d(fingerprint->maxSamples);
+    fingerprint->aux = minfft_mkaux_realdft_1d((int)fingerprint->maxSamples);
     fingerprint->input = malloc(sizeof(double) * fingerprint->maxSamples);
     fingerprint->weighted = malloc(sizeof(minfft_real) * fingerprint->maxSamples);
     fingerprint->output = malloc(sizeof(minfft_cmpl) * fingerprint->countResults);
@@ -250,7 +255,7 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 
     // Add up to sampleCount samples to fingerprint->input (scaled as floating point real data)
     for (size_t i = 0; i < samplesUsed; i++) {
-        int index = fingerprint->sampleOffset + i;
+        size_t index = fingerprint->sampleOffset + i;
         double value = (double)samples[i] / 32768;
         fingerprint->input[index] = (double)value;
     }
@@ -300,7 +305,7 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 
 
 typedef struct interval_tag {
-    int id;
+    size_t id;      // label id for this interval
     double start;
     double end;
 } interval_t;
@@ -453,7 +458,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
 
             // Add stats to current interval
             if (interval != NULL) {
-                int id = interval->id;
+                size_t id = interval->id;
                 running_stats_t *stats = audioid->stats[id];
                 for (size_t i = 0; i < audioid->countBuckets; i++) {
                     running_stats_add(&stats[i], audioid->fingerprint.buckets[i]);
@@ -552,7 +557,7 @@ bool AudioIdStart(audioid_t *audioid) {
         // Display intervals
         for (size_t i = 0; i < audioid->countIntervals; i++) {
             interval_t *interval = &audioid->intervals[i];
-            if (audioid->verbose || true) fprintf(stderr, "INTERVAL: #%zu %d/%s (%0.2f-%0.2f)\n", i + 1, interval->id, AudioIdGetLabelName(audioid, interval->id), interval->start, interval->end);
+            if (audioid->verbose || true) fprintf(stderr, "INTERVAL: #%zu %zu/%s (%0.2f-%0.2f)\n", i + 1, interval->id, AudioIdGetLabelName(audioid, interval->id), interval->start, interval->end);
         }
     }
 
