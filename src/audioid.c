@@ -26,7 +26,7 @@
 #define HAMMING_WEIGHT 0.53836  // 25.0/46.0
 #define FFT_WINDOW_SIZE 2048    // 1024+1 results
 #define FFT_BUCKET_COUNT 128    // 128
-
+#define AUDIOID_DEFAULT_CYCLE_COUNT 8
 
 // Reduced loss of precision for running stats, informed by: https://www.johndcook.com/blog/standard_deviation/
 typedef struct {
@@ -118,7 +118,7 @@ static unsigned int Gradient(double value) {
     }
 }
 
-static void DebugVisualizeValues(double *values, size_t count, bool showMatch, const char *intervalLabel, const char *closestLabel, double closestDistance) {
+static void DebugVisualizeValues(double *values, size_t count, bool showMatch, int groupMatchInterval, const char *closestGroup, const char *closestLabel, double closestDistance) {
     const int mode = 2;    // 0=solid block, 1=left-half block, 2=buffer previous line and upper-half block
     static double *buffer = NULL;   // horrible (non-threadsafe) hack to buffer previous line so output can be two virtual lines per physical line
     static size_t bufferSize = 0;
@@ -152,12 +152,10 @@ static void DebugVisualizeValues(double *values, size_t count, bool showMatch, c
         printf("\x1b[0m");
         if (showMatch) {
             const char *result = "";
-            if (intervalLabel != NULL) {
-                if (closestLabel == NULL || strcmp(intervalLabel, closestLabel) != 0) {
-                    result = "\x1b[31m"; // "XXX";
-                } else {
-                    result = "\x1b[32m"; // "!!!";
-                }
+            if (groupMatchInterval == 0) {
+                result = "\x1b[31m"; // "XXX";
+            } else if (groupMatchInterval == 1) {
+                result = "\x1b[32m"; // "!!!";
             }
             printf(" %s%s %0.3f\x1b[0m", result, closestLabel ? closestLabel : "-", closestDistance);
         }
@@ -173,19 +171,49 @@ typedef struct fingerprint_tag {
     size_t maxSamples;      // number of samples per FFT (can be windowed at WINDOW_OVERLAP)
     size_t countResults;    // (maxSamples/2)+1
     size_t countBuckets;    // count of quantized bucket
+    size_t cycleCount;      // length of cycle stats are accumulated over
     double *input;          // user-supplied input, converted to floating point
     minfft_real *weighted;  // window-weighted values before FFT
     minfft_cmpl *output;    // complex output of FFT
     minfft_aux *aux;        // auxillary data needed for FFT
     double *magnitude;      // magnitude of each output
     double *buckets;        // mean magnitude into fewer buckets
+    running_stats_t **stats;// stats for each bucket, repeated for overlap cycle of buckets
+    double *meanStats;      // mean stats
     size_t sampleOffset;    // index for next sample
+    size_t cycle;           // index of stats cycle 
 } fingerprint_t;
 
-void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples, size_t countBuckets) {
+void FingerprintResetStats(fingerprint_t *fingerprint, size_t cycle) {
+    // Clear stats
+    for (size_t i = 0; i < fingerprint->countBuckets; i++) {
+        running_stats_clear(&fingerprint->stats[cycle][i]);
+    }
+}
+
+double *FingerprintAccumulateStats(fingerprint_t *fingerprint) {
+    // Reset the oldest phase
+    FingerprintResetStats(fingerprint, fingerprint->cycle);
+    // Next phase
+    fingerprint->cycle = (fingerprint->cycle + 1) % fingerprint->cycleCount;
+    // Add to all phases of the cycle
+    for (size_t j = 0; j < fingerprint->cycleCount; j++) {
+        for (size_t i = 0; i < fingerprint->countBuckets; i++) {
+            running_stats_add(&fingerprint->stats[j][i], fingerprint->buckets[i]);
+        }
+    }
+    // Calculate mean stats for the current phase
+    for (size_t i = 0; i < fingerprint->countBuckets; i++) {
+        fingerprint->meanStats[i] = running_stats_mean(&fingerprint->stats[fingerprint->cycle][i]);
+    }
+    return fingerprint->meanStats;
+}
+
+void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples, size_t countBuckets, size_t cycleCount) {
     memset(fingerprint, 0, sizeof(*fingerprint));
     fingerprint->maxSamples = maxSamples;
     fingerprint->countBuckets = countBuckets;
+    fingerprint->cycleCount = cycleCount;
     fingerprint->countResults = (fingerprint->maxSamples / 2) + 1;
     fingerprint->sampleOffset = 0;
     fingerprint->aux = minfft_mkaux_realdft_1d((int)fingerprint->maxSamples);
@@ -194,6 +222,14 @@ void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples, size_t count
     fingerprint->output = malloc(sizeof(minfft_cmpl) * fingerprint->countResults);
     fingerprint->magnitude = malloc(sizeof(double) * fingerprint->countResults);
     fingerprint->buckets = malloc(sizeof(double) * fingerprint->countBuckets);
+    fingerprint->stats = malloc(sizeof(running_stats_t*) * fingerprint->countBuckets);
+    for (size_t i = 0; i < fingerprint->cycleCount; i++) {
+        fingerprint->stats[i] = malloc(sizeof(running_stats_t) * fingerprint->countBuckets);
+    }
+    for (size_t i = 0; i < fingerprint->cycleCount; i++) {
+        FingerprintResetStats(fingerprint, i);
+    }
+    fingerprint->meanStats = malloc(sizeof(double) * fingerprint->countBuckets);
 }
 
 void FingerprintDestroy(fingerprint_t *fingerprint) {
@@ -220,6 +256,14 @@ void FingerprintDestroy(fingerprint_t *fingerprint) {
     if (fingerprint->buckets != NULL) {
         free(fingerprint->buckets);
         fingerprint->buckets = NULL;
+    }
+    if (fingerprint->stats != NULL) {
+        free(fingerprint->stats);
+        fingerprint->stats = NULL;
+    }
+    if (fingerprint->meanStats != NULL) {
+        free(fingerprint->meanStats);
+        fingerprint->meanStats = NULL;
     }
 }
 
@@ -318,16 +362,16 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
     return samplesUsed;
 }
 
-double FingerprintDistance(fingerprint_t *fingerprint, running_stats_t *stats) {
+double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
     double totalDistance = 0;
-    for (size_t i = 0; i < fingerprint->countBuckets; i++) {
+    for (size_t i = 0; i < countBuckets; i++) {
         double mean0 = running_stats_mean(&stats[i]);
-        double mean1 = fingerprint->buckets[i];
+        double mean1 = buckets[i];
         double diff = mean1 - mean0;
-        double dist = diff * diff;
+        double dist = sqrt(diff * diff);
         totalDistance += dist;
     }
-    double result = totalDistance / fingerprint->countBuckets;
+    double result = totalDistance / countBuckets;
     return result;
 }
 
@@ -348,8 +392,9 @@ typedef struct audioid_tag {
     unsigned int sampleRate;
     size_t windowSize;
     size_t countBuckets;
+    size_t cycleCount;
     bool verbose;
-    bool visualize;
+    int visualize;
     bool learn;
 
     // Audio device capture
@@ -364,6 +409,7 @@ typedef struct audioid_tag {
 
     // Labels
     const char **labels;
+    const char **labelsGroup;
     running_stats_t **stats;
     size_t countLabels;
 
@@ -398,6 +444,16 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
     audioid->labels = (const char **)realloc((void *)audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
     audioid->labels[audioid->countLabels] = strdup(label);
 
+    // Initial '?' prefix to flag label (unused)
+    bool flagged = (label[0] == '?');
+
+    // Add the new label's group
+    audioid->labelsGroup = (const char **)realloc((void *)audioid->labelsGroup, sizeof(const char *) * (audioid->countLabels + 1));
+    char *group = strdup(label + (flagged ? 1 : 0)); // Duplicate (and remove flag prefix)
+    char *groupSep = strchr(group, '/');
+    if (groupSep != NULL) *groupSep = '\0'; // Leave only the group
+    audioid->labelsGroup[audioid->countLabels] = group;
+
     // Allocate memory for per-label stats
     audioid->stats = (running_stats_t **)realloc(audioid->stats, sizeof(running_stats_t *) * (audioid->countLabels + 1));
     audioid->stats[audioid->countLabels] = (running_stats_t *)malloc(sizeof(running_stats_t) * audioid->countBuckets);
@@ -413,6 +469,8 @@ static void AudioIdFreeLabels(audioid_t *audioid) {
     for (size_t id = 0; id < audioid->countLabels; id++) {
         free((void *)audioid->labels[id]);
         audioid->labels[id] = NULL;
+        free((void *)audioid->labelsGroup[id]);
+        audioid->labelsGroup[id] = NULL;
         free(audioid->stats[id]);
         audioid->stats[id] = NULL;
     }
@@ -494,7 +552,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             }
 
             // Add stats to current interval
-            if (interval != NULL) {
+            if (interval != NULL && audioid->learn) {
                 size_t id = interval->id;
                 running_stats_t *stats = audioid->stats[id];
                 for (size_t i = 0; i < audioid->countBuckets; i++) {
@@ -503,19 +561,23 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             }
 
             // Recognition mode
-            const char *closestLabel = NULL;
+            int closestLabel = -1;
             double closestDistance = 0;
             if (!audioid->learn) {
+
+// In recognition mode, replace buckets with cycled stats
+buckets = FingerprintAccumulateStats(&audioid->fingerprint);
+
                 for (size_t id = 0; id < audioid->countLabels; id++) {
                     running_stats_t *stats = audioid->stats[id];
-                    double distance = FingerprintDistance(&audioid->fingerprint, stats);
-                    if (closestLabel == NULL || distance < closestDistance) {
-                        closestLabel = audioid->labels[id];
+                    double distance = Distance(audioid->countBuckets, buckets, stats);
+                    if (closestLabel < 0 || distance < closestDistance) {
+                        closestLabel = (int)id;
                         closestDistance = distance;
                     }
                 }
                 if (!audioid->visualize) {
-                    fprintf(stdout, "%f %s %f\n", time, closestLabel ? closestLabel : "-", closestDistance);
+                    fprintf(stdout, "%f %s %f\n", time, closestLabel < 0 ? "-" : audioid->labelsGroup[closestLabel], closestDistance);
                     fflush(stdout);
                 }
             }
@@ -523,8 +585,25 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             // Output
             if (audioid->verbose) fprintf(stderr, ">>> %d results.\n", (int)countResults);
             if (audioid->visualize) {
-if (audioid->learn || audioid->labelFile == NULL || interval != NULL) // only output labelled regions
-                DebugVisualizeValues(buckets, countResults, !audioid->learn, interval != NULL ? audioid->labels[interval->id] : NULL, closestLabel, closestDistance);
+if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || interval != NULL) && audioid->fingerprint.cycle == 0))) // only output labelled regions
+{
+                const char *closestLabelName = closestLabel < 0 ? NULL : audioid->labels[closestLabel];
+                const char *closestGroupName = closestLabel < 0 ? NULL : audioid->labelsGroup[closestLabel];
+                const char *intervalGroup = interval != NULL ? audioid->labelsGroup[interval->id] : NULL;
+                
+                bool showMatch = !audioid->learn;
+
+                int groupMatchInterval = -1;    // don't care
+                if (intervalGroup != NULL) {
+                    if (closestGroupName == NULL || strcmp(intervalGroup, closestGroupName) != 0) {
+                        groupMatchInterval = 0; // Does not match
+                    } else {
+                        groupMatchInterval = 1; // Matches
+                    }
+                }
+
+                DebugVisualizeValues(buckets, countResults, showMatch, groupMatchInterval, closestGroupName, closestLabelName, closestDistance);
+}
             }
         }
     }
@@ -552,15 +631,16 @@ void AudioIdDestroy(audioid_t *audioid) {
 }
 
 // Initialize an audioid object with an empty configuration
-void AudioIdInit(audioid_t *audioid, bool visualize) {
+void AudioIdInit(audioid_t *audioid, int visualize) {
     memset(audioid, 0, sizeof(*audioid));
 
-    // TODO: Move these to parameters
+    // Defaults
     audioid->sampleRate = AUDIOID_SAMPLE_RATE;
     audioid->windowSize = FFT_WINDOW_SIZE; // 2048 / AUDIOID_SAMPLE_RATE = 0.128s // 1024+1 results
     audioid->countBuckets = FFT_BUCKET_COUNT; // 128
     audioid->verbose = AUDIOID_VERBOSE;
     audioid->visualize = visualize;
+    audioid->cycleCount = AUDIOID_DEFAULT_CYCLE_COUNT;
 }
 
 // Configure to learn from labelled audio
@@ -581,7 +661,7 @@ void AudioIdConfigRecognize(audioid_t *audioid, const char *filename, const char
 bool AudioIdStart(audioid_t *audioid) {
     ma_result result;
 
-    FingerprintInit(&audioid->fingerprint, audioid->windowSize, audioid->countBuckets);
+    FingerprintInit(&audioid->fingerprint, audioid->windowSize, audioid->countBuckets, audioid->cycleCount);
 
     if (audioid->labelFile != NULL) {
         fprintf(stderr, "AUDIOID: Opening label file: %s\n", audioid->labelFile);
@@ -611,12 +691,12 @@ bool AudioIdStart(audioid_t *audioid) {
         // Display intervals
         for (size_t i = 0; i < audioid->countIntervals; i++) {
             interval_t *interval = &audioid->intervals[i];
-            if (audioid->verbose || true) fprintf(stderr, "INTERVAL: #%zu %zu/%s (%0.2f-%0.2f)\n", i + 1, interval->id, AudioIdGetLabelName(audioid, interval->id), interval->start, interval->end);
+            if (audioid->verbose) fprintf(stderr, "INTERVAL: #%zu %zu/%s (%0.2f-%0.2f)\n", i + 1, interval->id, AudioIdGetLabelName(audioid, interval->id), interval->start, interval->end);
         }
     }
 
     if (audioid->filename != NULL) {
-        fprintf(stderr, "AUDIOID: Opening sound file: %s\n", audioid->filename);
+        if (audioid->verbose) fprintf(stderr, "AUDIOID: Opening sound file: %s\n", audioid->filename);
 
         audioid->decoderConfig = ma_decoder_config_init(ma_format_s16, 1, audioid->sampleRate);
 
@@ -627,7 +707,7 @@ bool AudioIdStart(audioid_t *audioid) {
         }
         audioid->decoderInitialized = true;
     } else {
-        fprintf(stderr, "AUDIOID: Configuring audio capture...\n");
+        if (audioid->verbose) fprintf(stderr, "AUDIOID: Configuring audio capture...\n");
 
         audioid->deviceConfig = ma_device_config_init(ma_device_type_capture);
         audioid->deviceConfig.capture.format   = ma_format_s16;
@@ -649,7 +729,7 @@ bool AudioIdStart(audioid_t *audioid) {
             return false;
         }
 
-        fprintf(stderr, "AUDIOID: ...audio capture configured.\n");
+        if (audioid->verbose) fprintf(stderr, "AUDIOID: ...audio capture configured.\n");
         audioid->deviceInitialized = true;
     }
     return true;
@@ -837,12 +917,12 @@ bool AudioIdStateSave(audioid_t *audioid, const char *filename) {
 // Shutdown an audioid object (but do not destroy it), the object can be used again
 void AudioIdShutdown(audioid_t *audioid) {
     if (audioid->deviceInitialized) {
-        fprintf(stderr, "AUDIOID: Stopping audio capture.\n");
+        if (audioid->verbose) fprintf(stderr, "AUDIOID: Stopping audio capture.\n");
         ma_device_uninit(&audioid->device);
         audioid->deviceInitialized = false;
     }
     if (audioid->decoderInitialized) {
-        fprintf(stderr, "AUDIOID: Closing audio file.\n");
+        if (audioid->verbose) fprintf(stderr, "AUDIOID: Closing audio file.\n");
         ma_decoder_uninit(&audioid->decoder);
         audioid->decoderInitialized = false;
     }

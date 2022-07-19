@@ -18,7 +18,7 @@ audioid_t *AudioIdCreate();
 void AudioIdDestroy();
 
 // Initialize an audioid object with an empty configuration
-void AudioIdInit(audioid_t *audioid, bool visualize);
+void AudioIdInit(audioid_t *audioid, int visualize);
 
 // Configure to learn from labelled audio
 void AudioIdConfigLearn(audioid_t *audioid, const char *filename, const char *labelFile);

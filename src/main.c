@@ -9,9 +9,9 @@
 
 #include "audioid.h"
 
-const bool debugFlow = !false;
+const bool debugFlow = false;
 
-int run(const char *filename, bool visualize, bool learn, const char *stateFile, const char *labelFile, const char *outputStateFile) {
+int run(const char *filename, int visualize, bool learn, const char *stateFile, const char *labelFile, const char *outputStateFile) {
 if (debugFlow) fprintf(stderr, "Create...\n");
     audioid_t *audioid = AudioIdCreate();
 
@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
     const char *labelFile = NULL;
     const char *stateFile = NULL;
     const char *outputStateFile = NULL;
-    bool visualize = false;
+    int visualize = 0;
     bool learn = false;
 
     #ifdef _WIN32
@@ -77,7 +77,8 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (allowFlags && strcmp(argv[i], "--") == 0) { allowFlags = false; }
         else if (allowFlags && strcmp(argv[i], "--help") == 0) { help = true; }
-        else if (allowFlags && strcmp(argv[i], "--visualize") == 0) { visualize = true; }
+        else if (allowFlags && strcmp(argv[i], "--visualize") == 0) { visualize = 1; }
+        else if (allowFlags && strcmp(argv[i], "--visualize:reduced") == 0) { visualize = 2; }
         else if (allowFlags && strcmp(argv[i], "--learn") == 0) { learn = true; }
         else if (allowFlags && strcmp(argv[i], "--state") == 0) {
             if (i + 1 < argc) { stateFile = argv[++i]; }
@@ -108,7 +109,7 @@ int main(int argc, char *argv[]) {
     if (help) {
         printf("AudioID - Daniel Jackson, 2022.\n");
         printf("\n");
-        printf("Usage:  audioid [--state state.ini] [--visualize] [sound.wav] [--labels sound.txt [--learn [--write-state state.ini]]]\n");
+        printf("Usage:  audioid [--state state.ini] [--visualize[:reduced]] [sound.wav] [--labels sound.txt [--learn [--write-state state.ini]]]\n");
         printf("\n");
         return 1;
     }
