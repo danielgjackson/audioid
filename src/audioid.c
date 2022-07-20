@@ -1,6 +1,13 @@
 // AudioId - Daniel Jackson, 2022.
 
 // TODO: Divide into components with smaller responsibilities.
+// TODO: Better distance metric (use variance/stddev for sample points)
+// TODO: State-file maximum distance for label
+// TODO: Output modal filter and duration -> short term hypothesis (and whether meets minimum time & within limit of another event finishing)
+// TODO: State-file limits for label (minimum time) -> long-term events
+// TODO: Multi-stage events (start must be within N seconds of another event finishing)
+// TODO: Maximum likeliness over last N windows based on expected transitions between labels
+
 
 #ifdef _MSC_VER // [dgj]
     #define _CRT_SECURE_NO_WARNINGS     // fopen / strtok
@@ -26,7 +33,7 @@
 #define HAMMING_WEIGHT 0.53836  // 25.0/46.0
 #define FFT_WINDOW_SIZE 2048    // 1024+1 results
 #define FFT_BUCKET_COUNT 128    // 128
-#define AUDIOID_DEFAULT_CYCLE_COUNT 8
+#define AUDIOID_DEFAULT_CYCLE_COUNT 8  // 8
 
 // Reduced loss of precision for running stats, informed by: https://www.johndcook.com/blog/standard_deviation/
 typedef struct {
@@ -121,14 +128,31 @@ static unsigned int Gradient(double value) {
 static void DebugVisualizeValues(double *values, size_t count, bool showMatch, int groupMatchInterval, const char *closestGroup, const char *closestLabel, double closestDistance) {
     const int mode = 2;    // 0=solid block, 1=left-half block, 2=buffer previous line and upper-half block
     static double *buffer = NULL;   // horrible (non-threadsafe) hack to buffer previous line so output can be two virtual lines per physical line
+    char thisResult[256] = "";
+    static char lastResult[256] = "";   // horrible (non-threadsafe) hack to buffer previous line end so output can be two virtual lines per physical line
     static size_t bufferSize = 0;
     static int bufferLine = 0;
+
+    thisResult[0] = '\0';
+    if (showMatch) {
+        const char *color = "";
+        if (groupMatchInterval == 0) {
+            color = "\x1b[31m"; // "XXX";
+        } else if (groupMatchInterval == 1) {
+            color = "\x1b[32m"; // "!!!";
+        }
+        sprintf(thisResult, " %s%.5s %0.2f\x1b[0m", color, closestLabel ? closestLabel : "-", closestDistance);
+    }
+
     if (mode == 2 && bufferSize < count) {
         bufferSize = count;
         buffer = realloc(buffer, sizeof(double) * bufferSize);
     }
     if (mode == 2 && (bufferLine & 1) == 0) {
         memcpy(buffer, values, sizeof(double) * count);
+        strcpy(lastResult, thisResult);
+        strcat(lastResult, "\t");
+        thisResult[0] = '\0';
     } else {
         for (size_t x = 0; x < count; x++) {
             unsigned int c = Gradient(values[x]);
@@ -149,17 +173,7 @@ static void DebugVisualizeValues(double *values, size_t count, bool showMatch, i
                 printf(u8"\x1b[38;2;%d;%d;%dm\u2588", (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
             }
         }        
-        printf("\x1b[0m");
-        if (showMatch) {
-            const char *result = "";
-            if (groupMatchInterval == 0) {
-                result = "\x1b[31m"; // "XXX";
-            } else if (groupMatchInterval == 1) {
-                result = "\x1b[32m"; // "!!!";
-            }
-            printf(" %s%s %0.3f\x1b[0m", result, closestLabel ? closestLabel : "-", closestDistance);
-        }
-        printf("\n");
+        printf("\x1b[0m%s%s\n", lastResult, thisResult);
     }
     fflush(stdout);
     bufferLine++;
@@ -363,16 +377,73 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
 }
 
 double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
+#if 0
+    // Cosine similarity
+    double sumAB = 0;
+    double sumAA = 0;
+    double sumBB = 0;
+    for (size_t i = 0; i < countBuckets; i++) {
+        double a = running_stats_mean(&stats[i]);
+        double b = buckets[i];
+        sumAB += a * b;
+        sumAA += a * a;
+        sumBB += b * b;
+    }
+    double divisor = sqrt(sumAA) * sqrt(sumBB);
+
+    // Range -1=opposite to 1=same 
+    double cosineSimilarity;
+    if (divisor < 0.00001) {
+        cosineSimilarity = 0;
+    } else {
+        cosineSimilarity = sumAB / divisor;
+    }
+
+    return 1.0 - cosineSimilarity;
+#elif 0
+    // TF-IDF-inspired
+    #error "Not implemented"
+
+#elif 0
+    // Distance (normalized)
+    double sumAA = 0;
+    double sumBB = 0;
+    for (size_t i = 0; i < countBuckets; i++) {
+        double a = running_stats_mean(&stats[i]);
+        double b = buckets[i];
+        sumAA += a * a;
+        sumBB += b * b;
+    }
+    double normA = sqrt(sumAA);
+    double normB = sqrt(sumBB);
+    if (normA < 0.001) normA = 0.001;
+    if (normB < 0.001) normB = 0.001;
+
     double totalDistance = 0;
     for (size_t i = 0; i < countBuckets; i++) {
-        double mean0 = running_stats_mean(&stats[i]);
-        double mean1 = buckets[i];
-        double diff = mean1 - mean0;
+        double a = running_stats_mean(&stats[i]) / normA;
+        double b = buckets[i] / normB;
+        double diff = b - a;
         double dist = sqrt(diff * diff);
         totalDistance += dist;
     }
     double result = totalDistance / countBuckets;
     return result;
+#elif 1
+    // Distance (not normalized)
+    double totalDistance = 0;
+    for (size_t i = 0; i < countBuckets; i++) {
+        double a = running_stats_mean(&stats[i]);
+        double b = buckets[i];
+        double diff = b - a;
+        double dist = sqrt(diff * diff);
+        totalDistance += dist;
+    }
+    double result = totalDistance / countBuckets;
+    return result;
+#else
+    #error "No distance metric"
+#endif
 }
 
 
@@ -585,7 +656,7 @@ buckets = FingerprintAccumulateStats(&audioid->fingerprint);
             // Output
             if (audioid->verbose) fprintf(stderr, ">>> %d results.\n", (int)countResults);
             if (audioid->visualize) {
-if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || interval != NULL) && audioid->fingerprint.cycle == 0))) // only output labelled regions
+if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || (interval != NULL && strcmp(audioid->labelsGroup[interval->id], "silence") != 0)) && audioid->fingerprint.cycle == 0))) // only output labelled regions
 {
                 const char *closestLabelName = closestLabel < 0 ? NULL : audioid->labels[closestLabel];
                 const char *closestGroupName = closestLabel < 0 ? NULL : audioid->labelsGroup[closestLabel];
