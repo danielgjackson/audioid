@@ -29,5 +29,6 @@
         "math.h": "c",
         "complex.h": "c",
         "stdint.h": "c"
-    }
+    },
+    "terminal.integrated.scrollback": 10000
 }

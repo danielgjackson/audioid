@@ -2,6 +2,7 @@
 
 // TODO: Divide into components with smaller responsibilities.
 // TODO: Better distance metric (use variance/stddev for sample points)
+// TODO: Per-label distance weighting override
 // TODO: State-file maximum distance for label
 // TODO: Output modal filter and duration -> short term hypothesis (and whether meets minimum time & within limit of another event finishing)
 // TODO: State-file limits for label (minimum time) -> long-term events
@@ -125,7 +126,7 @@ static unsigned int Gradient(double value) {
     }
 }
 
-static void DebugVisualizeValues(double *values, size_t count, bool showMatch, int groupMatchInterval, const char *closestGroup, const char *closestLabel, double closestDistance) {
+static void DebugVisualizeValues(running_stats_t *values, size_t count, bool showMatch, int groupMatchInterval, const char *closestGroup, const char *closestLabel, double closestDistance) {
     const int mode = 2;    // 0=solid block, 1=left-half block, 2=buffer previous line and upper-half block
     static double *buffer = NULL;   // horrible (non-threadsafe) hack to buffer previous line so output can be two virtual lines per physical line
     char thisResult[256] = "";
@@ -149,16 +150,20 @@ static void DebugVisualizeValues(double *values, size_t count, bool showMatch, i
         buffer = realloc(buffer, sizeof(double) * bufferSize);
     }
     if (mode == 2 && (bufferLine & 1) == 0) {
-        memcpy(buffer, values, sizeof(double) * count);
+        for (size_t x = 0; x < count; x++) {
+            buffer[x] = running_stats_mean(&values[x]);
+        }
         strcpy(lastResult, thisResult);
         strcat(lastResult, "\t");
         thisResult[0] = '\0';
     } else {
         for (size_t x = 0; x < count; x++) {
-            unsigned int c = Gradient(values[x]);
+            double v = running_stats_mean(&values[x]);
+            unsigned int c = Gradient(v);
             if (mode == 1) {
                 if ((x & 1) == 1) {
-                    unsigned int cPrev = Gradient(values[x - 1]);
+                    double vPrev = running_stats_mean(&values[x - 1]);
+                    unsigned int cPrev = Gradient(vPrev);
                     // Left-half block - Unicode: \u258c - UTF-8: \xe2\x96\x8c
                     printf(u8"\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm\u258c", (unsigned char)(cPrev>>0), (unsigned char)(cPrev>>8), (unsigned char)(cPrev>>16), (unsigned char)(c>>0), (unsigned char)(c>>8), (unsigned char)(c>>16));
                 }
@@ -205,7 +210,7 @@ void FingerprintResetStats(fingerprint_t *fingerprint, size_t cycle) {
     }
 }
 
-double *FingerprintAccumulateStats(fingerprint_t *fingerprint) {
+void FingerprintAccumulateStats(fingerprint_t *fingerprint) {
     // Reset the oldest phase
     FingerprintResetStats(fingerprint, fingerprint->cycle);
     // Next phase
@@ -216,12 +221,21 @@ double *FingerprintAccumulateStats(fingerprint_t *fingerprint) {
             running_stats_add(&fingerprint->stats[j][i], fingerprint->buckets[i]);
         }
     }
+}
+
+running_stats_t *FingerprintStats(fingerprint_t *fingerprint) {
+    return fingerprint->stats[fingerprint->cycle];
+}
+
+/*
+double *FingerprintMeanStats(fingerprint_t *fingerprint) {
     // Calculate mean stats for the current phase
     for (size_t i = 0; i < fingerprint->countBuckets; i++) {
         fingerprint->meanStats[i] = running_stats_mean(&fingerprint->stats[fingerprint->cycle][i]);
     }
     return fingerprint->meanStats;
 }
+*/
 
 void FingerprintInit(fingerprint_t *fingerprint, size_t maxSamples, size_t countBuckets, size_t cycleCount) {
     memset(fingerprint, 0, sizeof(*fingerprint));
@@ -376,7 +390,7 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
     return samplesUsed;
 }
 
-double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
+double Distance(size_t countBuckets, running_stats_t *buckets, running_stats_t *stats) {
 #if 0
     // Cosine similarity
     double sumAB = 0;
@@ -384,7 +398,7 @@ double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
     double sumBB = 0;
     for (size_t i = 0; i < countBuckets; i++) {
         double a = running_stats_mean(&stats[i]);
-        double b = buckets[i];
+        double b = running_stats_mean(&buckets[i]);
         sumAB += a * b;
         sumAA += a * a;
         sumBB += b * b;
@@ -401,6 +415,27 @@ double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
 
     return 1.0 - cosineSimilarity;
 #elif 0
+    // Distribution comparison
+    double sumZ = 0;
+    for (size_t i = 0; i < countBuckets; i++) {
+        double meanA = running_stats_mean(&stats[i]);
+        double stddevA = running_stats_stddev(&stats[i]);
+        double countA = running_stats_count(&stats[i]);
+        double meanB = running_stats_mean(&buckets[i]);
+        double stddevB = running_stats_stddev(&buckets[i]);
+        double countB = running_stats_count(&buckets[i]);
+
+        double sigmaA = countA > 0 ? stddevA / sqrt(countA) : 0;
+        double sigmaB = countB > 0 ? stddevB / sqrt(countB) : 0;
+        double divisor = sqrt(sigmaA * sigmaA + sigmaB * sigmaB);
+
+        double meanDiff = meanA - meanB;
+        double z = meanDiff / (divisor > 0 ? divisor : 1);
+
+        sumZ += fabs(z);
+    }
+    return sumZ;
+#elif 0
     // TF-IDF-inspired
     #error "Not implemented"
 
@@ -410,7 +445,7 @@ double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
     double sumBB = 0;
     for (size_t i = 0; i < countBuckets; i++) {
         double a = running_stats_mean(&stats[i]);
-        double b = buckets[i];
+        double b = running_stats_mean(&buckets[i]);
         sumAA += a * a;
         sumBB += b * b;
     }
@@ -422,7 +457,7 @@ double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
     double totalDistance = 0;
     for (size_t i = 0; i < countBuckets; i++) {
         double a = running_stats_mean(&stats[i]) / normA;
-        double b = buckets[i] / normB;
+        double b = running_stats_mean(&buckets[i]) / normB;
         double diff = b - a;
         double dist = sqrt(diff * diff);
         totalDistance += dist;
@@ -434,7 +469,7 @@ double Distance(size_t countBuckets, double *buckets, running_stats_t *stats) {
     double totalDistance = 0;
     for (size_t i = 0; i < countBuckets; i++) {
         double a = running_stats_mean(&stats[i]);
-        double b = buckets[i];
+        double b = running_stats_mean(&buckets[i]);
         double diff = b - a;
         double dist = sqrt(diff * diff);
         totalDistance += dist;
@@ -479,10 +514,13 @@ typedef struct audioid_tag {
     bool decoderInitialized;
 
     // Labels
+    size_t countLabels;
+    // TODO: Split into a struct label_t
     const char **labels;
     const char **labelsGroup;
     running_stats_t **stats;
-    size_t countLabels;
+    double *scale;
+    double *limit;
 
     // Intervals
     interval_t *intervals;
@@ -532,6 +570,12 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
         running_stats_clear(&audioid->stats[audioid->countLabels][i]);
     }
 
+    // Other per-label values
+    audioid->scale = (double *)realloc(audioid->scale, sizeof(double) * (audioid->countLabels + 1));
+    audioid->scale[audioid->countLabels] = 1.0;
+    audioid->limit = (double *)realloc(audioid->limit, sizeof(double) * (audioid->countLabels + 1));
+    audioid->limit[audioid->countLabels] = -1.0; // < 0 = no limit applied
+
     // Return the new label id
     return audioid->countLabels++;
 }
@@ -546,8 +590,13 @@ static void AudioIdFreeLabels(audioid_t *audioid) {
         audioid->stats[id] = NULL;
     }
     free((void *)audioid->labels);
-    free(audioid->stats);
     audioid->labels = NULL;
+    free(audioid->stats);
+    audioid->stats = NULL;
+    free(audioid->scale);
+    audioid->scale = NULL;
+    free(audioid->limit);
+    audioid->limit = NULL;
     audioid->countLabels = 0;
 }
 
@@ -631,18 +680,24 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                 }
             }
 
+            // Add to cycled stats (only 1-cycle in learning mode)
+            FingerprintAccumulateStats(&audioid->fingerprint);
+            running_stats_t *inputStats = FingerprintStats(&audioid->fingerprint);
+
+//buckets = FingerprintMeanStats(&audioid->fingerprint);
+
             // Recognition mode
             int closestLabel = -1;
             double closestDistance = 0;
             if (!audioid->learn) {
-
-// In recognition mode, replace buckets with cycled stats
-buckets = FingerprintAccumulateStats(&audioid->fingerprint);
-
                 for (size_t id = 0; id < audioid->countLabels; id++) {
                     running_stats_t *stats = audioid->stats[id];
-                    double distance = Distance(audioid->countBuckets, buckets, stats);
-                    if (closestLabel < 0 || distance < closestDistance) {
+                    double scale = audioid->scale[id];
+                    double limit = audioid->limit[id];
+                    double rawDistance = Distance(audioid->countBuckets, inputStats, stats);
+                    double distance = scale * rawDistance;
+                    bool withinLimit = (limit < 0) || (distance < limit);
+                    if (withinLimit && (closestLabel < 0 || distance < closestDistance)) {
                         closestLabel = (int)id;
                         closestDistance = distance;
                     }
@@ -673,7 +728,7 @@ if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || a
                     }
                 }
 
-                DebugVisualizeValues(buckets, countResults, showMatch, groupMatchInterval, closestGroupName, closestLabelName, closestDistance);
+                DebugVisualizeValues(inputStats, countResults, showMatch, groupMatchInterval, closestGroupName, closestLabelName, closestDistance);
 }
             }
         }
@@ -945,6 +1000,10 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
                     fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat count %zu does not equal bucket count %zu: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, index, audioid->countBuckets, name);
                     errors++;
                 }
+            } if (strcmp(name, "scale") == 0) {
+                audioid->scale[labelId] = atof(value);
+            } if (strcmp(name, "limit") == 0) {
+                audioid->limit[labelId] = atof(value);
             } else {
                 fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu unrecognized name: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, name);
                 errors++;
@@ -977,6 +1036,8 @@ bool AudioIdStateSave(audioid_t *audioid, const char *filename) {
             fprintf(fp, "%s%u %f %f", i == 0 ? "" : "; ", stats->count, stats->mean, stats->sumVar);
         }
         fprintf(fp, "\"\n");
+        fprintf(fp, "scale = %f\n", audioid->scale[id]);
+        fprintf(fp, "limit = %f\n", audioid->limit[id]);
 
         fprintf(fp, "\n");
     }
