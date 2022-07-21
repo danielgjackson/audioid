@@ -1,13 +1,9 @@
 // AudioId - Daniel Jackson, 2022.
 
 // TODO: Divide into components with smaller responsibilities.
-// TODO: Better distance metric (use variance/stddev for sample points)
-// TODO: Per-label distance weighting override
-// TODO: State-file maximum distance for label
-// TODO: Output modal filter and duration -> short term hypothesis (and whether meets minimum time & within limit of another event finishing)
-// TODO: State-file limits for label (minimum time) -> long-term events
-// TODO: Multi-stage events (start must be within N seconds of another event finishing)
-// TODO: Maximum likeliness over last N windows based on expected transitions between labels
+// TODO: State-file modal filter size
+// TODO: State-file limits for label: minimum time, start must be within N seconds of another event being emitted.
+// TODO: Output short-term hypothesis: modal-filtered label, current duration, and whether it meets minimum time & within limit of another event finishing (it will emit as an event with final duration once over)
 
 
 #ifdef _MSC_VER // [dgj]
@@ -33,8 +29,10 @@
 #define WINDOW_OVERLAP 2        // <=1 = none, 2 = half
 #define HAMMING_WEIGHT 0.53836  // 25.0/46.0
 #define FFT_WINDOW_SIZE 2048    // 1024+1 results
-#define FFT_BUCKET_COUNT 128    // 128
-#define AUDIOID_DEFAULT_CYCLE_COUNT 8  // 8
+#define FFT_BUCKET_COUNT 256    // 128
+#define AUDIOID_DEFAULT_CYCLE_COUNT (4*WINDOW_OVERLAP)  // 8
+#define LOG_SCALE
+
 
 // Reduced loss of precision for running stats, informed by: https://www.johndcook.com/blog/standard_deviation/
 typedef struct {
@@ -372,9 +370,20 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
         }
 
         // Compute averaged buckets
+        size_t startFFT = 0;
+        size_t countFFT = fingerprint->countResults;
+#ifdef LOG_SCALE
+        double logScale = log(countFFT) / log(fingerprint->countBuckets);
+#endif
         for (size_t i = 0; i < fingerprint->countBuckets; i++) {
-            size_t iStartAt = i * fingerprint->countResults / fingerprint->countBuckets;
-            size_t iEndBefore = (i + 1) * fingerprint->countResults / fingerprint->countBuckets;
+#ifdef LOG_SCALE
+            size_t iStartAt = startFFT + (size_t)pow(i, logScale);
+            size_t iEndBefore = startFFT + (size_t)pow((i + 1), logScale);
+//printf(">>> %d -> [%d-%d)\n", i, iStartAt, iEndBefore); fflush(stdout); if (i + 1 >= fingerprint->countBuckets) exit(1);
+#else
+            size_t iStartAt = startFFT + i * countFFT / fingerprint->countBuckets;
+            size_t iEndBefore = startFFT + (i + 1) * countFFT / fingerprint->countBuckets;
+#endif
             double mean = 0;
             for (size_t i = iStartAt; i < iEndBefore; i++) {
                 mean += fingerprint->magnitude[i];
@@ -553,8 +562,8 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
     audioid->labels = (const char **)realloc((void *)audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
     audioid->labels[audioid->countLabels] = strdup(label);
 
-    // Initial '?' prefix to flag label (unused)
-    bool flagged = (label[0] == '?');
+    // Initial '?'/'!'/ prefix to flag label (unused)
+    bool flagged = (label[0] == '?') || (label[0] == '!');
 
     // Add the new label's group
     audioid->labelsGroup = (const char **)realloc((void *)audioid->labelsGroup, sizeof(const char *) * (audioid->countLabels + 1));
@@ -1000,9 +1009,9 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
                     fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat count %zu does not equal bucket count %zu: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, index, audioid->countBuckets, name);
                     errors++;
                 }
-            } if (strcmp(name, "scale") == 0) {
+            } else if (strcmp(name, "scale") == 0) {
                 audioid->scale[labelId] = atof(value);
-            } if (strcmp(name, "limit") == 0) {
+            } else if (strcmp(name, "limit") == 0) {
                 audioid->limit[labelId] = atof(value);
             } else {
                 fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu unrecognized name: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, name);

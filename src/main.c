@@ -21,7 +21,10 @@ if (debugFlow) fprintf(stderr, "Init...\n");
     // Load state
     if (stateFile != NULL) {
 if (debugFlow) fprintf(stderr, "Load...\n");
-        AudioIdStateLoad(audioid, stateFile);
+        if (!AudioIdStateLoad(audioid, stateFile)) {
+            fprintf(stderr, "ERROR: Problem loading state: %s\n", stateFile);
+            return -1;
+        }
     }
 
     // Configure
