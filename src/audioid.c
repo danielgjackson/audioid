@@ -1,12 +1,8 @@
 // AudioId - Daniel Jackson, 2022.
 
 // TODO: Divide into components with smaller responsibilities.
-// TODO: State-file modal filter size
-// TODO: State-file limits for label: minimum time, start must be within N seconds of another event being emitted.
-// TODO: Output short-term hypothesis: modal-filtered label, current duration, and whether it meets minimum time & within limit of another event finishing (it will emit as an event with final duration once over)
 
-
-#ifdef _MSC_VER // [dgj]
+#ifdef _MSC_VER
     #define _CRT_SECURE_NO_WARNINGS     // fopen / strtok
     #define _CRT_NONSTDC_NO_DEPRECATE   // strdup
     #define _USE_MATH_DEFINES
