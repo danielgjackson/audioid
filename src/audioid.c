@@ -32,6 +32,10 @@
 #define FFT_BUCKET_COUNT 256    // 128
 #define AUDIOID_DEFAULT_CYCLE_COUNT (4*WINDOW_OVERLAP)  // 8
 #define LOG_SCALE
+#define LABEL_ID_UNKNOWN (-1)
+#define MODAL_SIZE ((AUDIOID_DEFAULT_CYCLE_COUNT) * 150 / 100)
+#define MAX_STATES 64
+#define REPORT_MAX_INTERVAL 1.0
 
 
 // Reduced loss of precision for running stats, informed by: https://www.johndcook.com/blog/standard_deviation/
@@ -373,12 +377,12 @@ size_t FingerprintAddSamples(fingerprint_t *fingerprint, int16_t *samples, size_
         size_t startFFT = 0;
         size_t countFFT = fingerprint->countResults;
 #ifdef LOG_SCALE
-        double logScale = log(countFFT) / log(fingerprint->countBuckets);
+        double logScale = log((double)countFFT) / log((double)fingerprint->countBuckets);
 #endif
         for (size_t i = 0; i < fingerprint->countBuckets; i++) {
 #ifdef LOG_SCALE
-            size_t iStartAt = startFFT + (size_t)pow(i, logScale);
-            size_t iEndBefore = startFFT + (size_t)pow((i + 1), logScale);
+            size_t iStartAt = startFFT + (size_t)pow((double)i, logScale);
+            size_t iEndBefore = startFFT + (size_t)pow((double)(i + 1), logScale);
 //printf(">>> %d -> [%d-%d)\n", i, iStartAt, iEndBefore); fflush(stdout); if (i + 1 >= fingerprint->countBuckets) exit(1);
 #else
             size_t iStartAt = startFFT + i * countFFT / fingerprint->countBuckets;
@@ -524,12 +528,17 @@ typedef struct audioid_tag {
 
     // Labels
     size_t countLabels;
-    // TODO: Split into a struct label_t
+// TODO: Split into a struct label_t
     const char **labels;
     const char **labelsGroup;
     running_stats_t **stats;
     double *scale;
     double *limit;
+    size_t *matchingGroup;
+    double *minDuration;
+    int *onlyAfterEvent;
+    double *onlyWithinInterval;
+    double *lastFinished;
 
     // Intervals
     interval_t *intervals;
@@ -540,6 +549,12 @@ typedef struct audioid_tag {
 
     // State
     size_t totalSamples;
+    int stateIndex;
+    int lastState;
+    int stateHistory[MODAL_SIZE];
+    double stateChangeTime;
+    double lastReport;
+    bool stateLatched;
 
     // Current FFT fingerprint
     fingerprint_t fingerprint;
@@ -556,6 +571,12 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
         if (strcmp(audioid->labels[id], label) == 0) {
             return id;
         }
+    }
+
+    // Check limits
+    if (audioid->countLabels >= MAX_STATES) {
+        fprintf(stderr, "ERROR: Too many states (%zu)\n", audioid->countLabels);
+        exit(-1);
     }
 
     // Add the new label
@@ -584,6 +605,27 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
     audioid->scale[audioid->countLabels] = 1.0;
     audioid->limit = (double *)realloc(audioid->limit, sizeof(double) * (audioid->countLabels + 1));
     audioid->limit[audioid->countLabels] = -1.0; // < 0 = no limit applied
+    audioid->minDuration = (double *)realloc(audioid->minDuration, sizeof(double) * (audioid->countLabels + 1));
+    audioid->minDuration[audioid->countLabels] = -1.0; // < 0 = disabled
+    audioid->onlyAfterEvent = (int *)realloc(audioid->onlyAfterEvent, sizeof(int) * (audioid->countLabels + 1));
+    audioid->onlyAfterEvent[audioid->countLabels] = LABEL_ID_UNKNOWN;
+    audioid->onlyWithinInterval = (double *)realloc(audioid->onlyWithinInterval, sizeof(double) * (audioid->countLabels + 1));
+    audioid->onlyWithinInterval[audioid->countLabels] = 0.0;
+    audioid->lastFinished = (double *)realloc(audioid->lastFinished, sizeof(double) * (audioid->countLabels + 1));
+    audioid->lastFinished[audioid->countLabels] = -1.0;
+
+    // Find an earlier matching group
+    size_t matchingGroup = audioid->countLabels;
+    for (size_t id = 0; id < audioid->countLabels; id++) {
+        if (strcmp(audioid->labelsGroup[id], group) == 0) {
+            matchingGroup = id;
+            break;
+        }
+    }
+    audioid->matchingGroup = (size_t *)realloc(audioid->matchingGroup, sizeof(size_t) * (audioid->countLabels + 1));
+//fprintf(stderr, "MATCHING GROUP FOR #%zu|%s|%s = #%zu|%s|%s\n", audioid->countLabels, label, group, matchingGroup, audioid->labels[matchingGroup], audioid->labelsGroup[matchingGroup]);
+    audioid->matchingGroup[audioid->countLabels] = matchingGroup;
+
 
     // Return the new label id
     return audioid->countLabels++;
@@ -696,7 +738,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
 //buckets = FingerprintMeanStats(&audioid->fingerprint);
 
             // Recognition mode
-            int closestLabel = -1;
+            int closestLabel = LABEL_ID_UNKNOWN;
             double closestDistance = 0;
             if (!audioid->learn) {
                 for (size_t id = 0; id < audioid->countLabels; id++) {
@@ -706,15 +748,96 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                     double rawDistance = Distance(audioid->countBuckets, inputStats, stats);
                     double distance = scale * rawDistance;
                     bool withinLimit = (limit < 0) || (distance < limit);
-                    if (withinLimit && (closestLabel < 0 || distance < closestDistance)) {
+                    if (withinLimit && (closestLabel == LABEL_ID_UNKNOWN || distance < closestDistance)) {
                         closestLabel = (int)id;
                         closestDistance = distance;
                     }
                 }
-                if (!audioid->visualize) {
-                    fprintf(stdout, "%f %s %f\n", time, closestLabel < 0 ? "-" : audioid->labelsGroup[closestLabel], closestDistance);
-                    fflush(stdout);
+
+
+                // ------ STATE ------
+                // State is matching group
+                int thisState = (closestLabel == LABEL_ID_UNKNOWN) ? LABEL_ID_UNKNOWN : (int)audioid->matchingGroup[closestLabel];
+
+                // Add to modal filter
+                audioid->stateHistory[audioid->stateIndex % MODAL_SIZE] = thisState;
+                audioid->stateIndex++;
+
+                // Modal filter
+                int unknownCount = 0;
+                int matchingGroupCount[MAX_STATES] = {0};
+                for (size_t i = 0; i < MODAL_SIZE; i++) {
+                    int label = audioid->stateHistory[i];
+                    if (label == LABEL_ID_UNKNOWN) {
+                        unknownCount++;
+                    } else if (label < audioid->countLabels) {
+                        size_t group = audioid->matchingGroup[label];
+                        if (group < MAX_STATES) matchingGroupCount[group]++;
+                        else { fprintf(stderr, "ERROR: Internal error in group index (@%zu = label %d = group %zu)\n", i, label, group); exit(-1); }
+                    } else { fprintf(stderr, "ERROR: Internal error in history label (@%zu = label %d)\n", i, label); exit(-1); }
                 }
+                int currentState = LABEL_ID_UNKNOWN;
+                int maxCount = unknownCount;
+                for (size_t i = 0; i < audioid->countLabels; i++) {
+                    if (matchingGroupCount[i] > maxCount) {
+                        maxCount = matchingGroupCount[i];
+                        currentState = (int)i;
+                    }
+                }
+
+                // Previous state duration
+                double duration = time - audioid->stateChangeTime;
+
+                // Hypothesis change
+                if (currentState != audioid->lastState) {
+                    // Latched event end
+                    if (audioid->lastState != LABEL_ID_UNKNOWN && audioid->stateLatched) {
+                        audioid->lastFinished[audioid->lastState] = time;
+                        if (!audioid->visualize) {
+                            fprintf(stdout, "%.3f\te:end\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[audioid->lastState]), duration);
+                            fflush(stdout);
+                        }
+                    }
+                    audioid->stateLatched = false;
+                    audioid->stateChangeTime = time;
+                    audioid->lastState = currentState;
+                    duration = 0;
+                    audioid->lastReport = 0;    // force report
+                }
+
+                // Report current state
+                bool report = false;
+                report |= audioid->lastReport == 0; // just changed
+                report |= time >= audioid->lastReport + REPORT_MAX_INTERVAL;    // maximum interval exceeded
+                if (report) {
+                    // Report 'hear'
+                    if (!audioid->visualize) {
+                        fprintf(stdout, "%.3f\t%s\t%s\t%.3f\n", time, audioid->stateLatched ? "e:cont" : "hear", (currentState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[currentState]), duration, (closestLabel == LABEL_ID_UNKNOWN) ? "-" : audioid->labels[closestLabel]);
+                        fflush(stdout);
+                    }
+                    audioid->lastReport = time;
+                }
+
+                // Latch state?
+                if (!audioid->stateLatched && currentState != LABEL_ID_UNKNOWN) {
+                    bool latch = true;
+                    // If there is not required minimum duration set (>=0): do not latch; or there is and it has not yet occurred: do not latch
+                    if (audioid->minDuration[currentState] < 0) latch = false;
+                    if (audioid->minDuration[currentState] >= 0 && duration < audioid->minDuration[currentState]) latch = false;
+                    // If there is a required previous event...
+                    if (audioid->onlyAfterEvent[currentState] >= 0) {
+                        double lastFinished = audioid->lastFinished[audioid->onlyAfterEvent[currentState]];
+                        double onlyWithinInterval = audioid->onlyWithinInterval[currentState];
+                        // ...if it has not occurred, or finished longer ago than the maximum interval before this event started: do not latch 
+                        if (lastFinished < 0 || time > lastFinished + onlyWithinInterval + duration) latch = false;
+                    }
+                    if (latch) {
+                        fprintf(stdout, "%.3f\te:start\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[audioid->lastState]), duration);
+                        audioid->stateLatched = true;
+                    }
+                }
+
+                // ------------
             }
 
             // Output
@@ -722,8 +845,8 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             if (audioid->visualize) {
 if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || (interval != NULL && strcmp(audioid->labelsGroup[interval->id], "silence") != 0)) && audioid->fingerprint.cycle == 0))) // only output labelled regions
 {
-                const char *closestLabelName = closestLabel < 0 ? NULL : audioid->labels[closestLabel];
-                const char *closestGroupName = closestLabel < 0 ? NULL : audioid->labelsGroup[closestLabel];
+                const char *closestLabelName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labels[closestLabel];
+                const char *closestGroupName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labelsGroup[closestLabel];
                 const char *intervalGroup = interval != NULL ? audioid->labelsGroup[interval->id] : NULL;
                 
                 bool showMatch = !audioid->learn;
@@ -740,6 +863,9 @@ if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || a
                 DebugVisualizeValues(inputStats, countResults, showMatch, groupMatchInterval, closestGroupName, closestLabelName, closestDistance);
 }
             }
+
+
+
         }
     }
     return;
@@ -776,6 +902,13 @@ void AudioIdInit(audioid_t *audioid, int visualize) {
     audioid->verbose = AUDIOID_VERBOSE;
     audioid->visualize = visualize;
     audioid->cycleCount = AUDIOID_DEFAULT_CYCLE_COUNT;
+
+    // State
+    for (size_t i = 0; i < sizeof(audioid->stateHistory) / sizeof(audioid->stateHistory[0]); i++) {
+        audioid->stateHistory[i] = LABEL_ID_UNKNOWN;
+    }
+    audioid->stateIndex = 0;
+    audioid->lastState = LABEL_ID_UNKNOWN;
 }
 
 // Configure to learn from labelled audio
@@ -915,7 +1048,7 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
 
     for (size_t lineNumber = 1; ; lineNumber++) {
         // Read next line
-        char *line = fgets(buffer, bufferSize - 1, fp);
+        char *line = fgets(buffer, (int)bufferSize - 1, fp);
         buffer[bufferSize - 1] = '\0';
 
         // EOF (or read error)
@@ -955,7 +1088,7 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
             for (char *p = equals + 1; *p == ' '; p++) { *p = '\0'; value = p + 1; }
             // Trim quotes
             if (value[0] == '\"') value++;
-            if (value[0] == '\0' && value[strlen(value) - 1] == '\"') value[strlen(value) - 1] = '\0';
+            if (value[0] != '\0' && value[strlen(value) - 1] == '\"') value[strlen(value) - 1] = '\0';
         }
 
         if (globalSection) {
@@ -1013,6 +1146,12 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
                 audioid->scale[labelId] = atof(value);
             } else if (strcmp(name, "limit") == 0) {
                 audioid->limit[labelId] = atof(value);
+            } else if (strcmp(name, "minduration") == 0) {
+                audioid->minDuration[labelId] = atof(value);
+            } else if (strcmp(name, "afterevent") == 0) {
+                audioid->onlyAfterEvent[labelId] = AudioIdGetLabelId(audioid, value);
+            } else if (strcmp(name, "withininterval") == 0) {
+                audioid->onlyWithinInterval[labelId] = atof(value);
             } else {
                 fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu unrecognized name: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, name);
                 errors++;

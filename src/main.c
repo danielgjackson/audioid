@@ -11,16 +11,25 @@
 
 const bool debugFlow = false;
 
-int run(const char *filename, int visualize, bool learn, const char *stateFile, const char *labelFile, const char *outputStateFile) {
+int run(const char *filename, int visualize, bool learn, const char *eventsFile, const char *stateFile, const char *labelFile, const char *outputStateFile) {
 if (debugFlow) fprintf(stderr, "Create...\n");
     audioid_t *audioid = AudioIdCreate();
 
 if (debugFlow) fprintf(stderr, "Init...\n");
     AudioIdInit(audioid, visualize);
 
+    // Load events file (before state, so label groups parent correctly)
+    if (eventsFile != NULL) {
+if (debugFlow) fprintf(stderr, "Load events...\n");
+        if (!AudioIdStateLoad(audioid, eventsFile)) {
+            fprintf(stderr, "ERROR: Problem loading events: %s\n", eventsFile);
+            return -1;
+        }
+    }
+
     // Load state
     if (stateFile != NULL) {
-if (debugFlow) fprintf(stderr, "Load...\n");
+if (debugFlow) fprintf(stderr, "Load state...\n");
         if (!AudioIdStateLoad(audioid, stateFile)) {
             fprintf(stderr, "ERROR: Problem loading state: %s\n", stateFile);
             return -1;
@@ -67,6 +76,7 @@ int main(int argc, char *argv[]) {
     int positional = 0;
     const char *filename = NULL;
     const char *labelFile = NULL;
+    const char *eventsFile = NULL;
     const char *stateFile = NULL;
     const char *outputStateFile = NULL;
     int visualize = 0;
@@ -83,8 +93,12 @@ int main(int argc, char *argv[]) {
         else if (allowFlags && strcmp(argv[i], "--visualize") == 0) { visualize = 1; }
         else if (allowFlags && strcmp(argv[i], "--visualize:reduced") == 0) { visualize = 2; }
         else if (allowFlags && strcmp(argv[i], "--learn") == 0) { learn = true; }
+        else if (allowFlags && strcmp(argv[i], "--events") == 0) {
+            if (i + 1 < argc) eventsFile = argv[++i]; 
+            else { printf("ERROR: Missing parameter value for: --events\n"); help = true; }
+        }
         else if (allowFlags && strcmp(argv[i], "--state") == 0) {
-            if (i + 1 < argc) { stateFile = argv[++i]; }
+            if (i + 1 < argc) stateFile = argv[++i]; 
             else { printf("ERROR: Missing parameter value for: --state\n"); help = true; }
         }
         else if (allowFlags && strcmp(argv[i], "--labels") == 0) {
@@ -112,11 +126,11 @@ int main(int argc, char *argv[]) {
     if (help) {
         printf("AudioID - Daniel Jackson, 2022.\n");
         printf("\n");
-        printf("Usage:  audioid [--state state.ini] [--visualize[:reduced]] [sound.wav] [--labels sound.txt [--learn [--write-state state.ini]]]\n");
+        printf("Usage:  audioid [--events events.ini] [--state state.ini] [--visualize[:reduced]] [sound.wav] [--labels sound.txt [--learn [--write-state state.ini]]]\n");
         printf("\n");
         return 1;
     }
 
-    int returnValue = run(filename, visualize, learn, stateFile, labelFile, outputStateFile);
+    int returnValue = run(filename, visualize, learn, eventsFile, stateFile, labelFile, outputStateFile);
     return returnValue;
 }

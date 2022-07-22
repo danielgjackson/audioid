@@ -1,15 +1,18 @@
 {
     "cSpell.words": [
+        "afterevent",
         "audioid",
         "bucketcount",
         "invdft",
         "invrealdft",
+        "minduration",
         "minfft",
         "MINIAUDIO",
         "mkaux",
         "Mukhin",
         "NONSTDC",
         "realdft",
+        "withininterval",
         "Wmaybe",
         "Wunused"
     ],
