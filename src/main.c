@@ -9,18 +9,13 @@
 
 #include "audioid.h"
 
-const bool debugFlow = false;
-
 int run(const char *filename, int visualize, bool learn, const char *eventsFile, const char *stateFile, const char *labelFile, const char *outputStateFile) {
-if (debugFlow) fprintf(stderr, "Create...\n");
     audioid_t *audioid = AudioIdCreate();
 
-if (debugFlow) fprintf(stderr, "Init...\n");
     AudioIdInit(audioid, visualize);
 
     // Load events file (before state, so label groups parent correctly)
     if (eventsFile != NULL) {
-if (debugFlow) fprintf(stderr, "Load events...\n");
         if (!AudioIdStateLoad(audioid, eventsFile)) {
             fprintf(stderr, "ERROR: Problem loading events: %s\n", eventsFile);
             return -1;
@@ -29,7 +24,6 @@ if (debugFlow) fprintf(stderr, "Load events...\n");
 
     // Load state
     if (stateFile != NULL) {
-if (debugFlow) fprintf(stderr, "Load state...\n");
         if (!AudioIdStateLoad(audioid, stateFile)) {
             fprintf(stderr, "ERROR: Problem loading state: %s\n", stateFile);
             return -1;
@@ -39,30 +33,23 @@ if (debugFlow) fprintf(stderr, "Load state...\n");
     // Configure
     if (learn) {
         // Configure to learn from labelled audio
-if (debugFlow) fprintf(stderr, "Learning...\n");
         AudioIdConfigLearn(audioid, filename, labelFile);
     } else {
         // Configure to recognize from audio -- optionally pre-recoded audio from a file, live captured audio otherwise.
-if (debugFlow) fprintf(stderr, "Recognizing...\n");
         AudioIdConfigRecognize(audioid, filename, labelFile);
     }
 
     // Start processing
-if (debugFlow) fprintf(stderr, "Start...\n");
     AudioIdStart(audioid);
 
     // Block until completed
-if (debugFlow) fprintf(stderr, "Wait...\n");
     AudioIdWaitUntilDone(audioid);
-if (debugFlow) fprintf(stderr, "Done!\n");
 
     // Save state
     if (outputStateFile != NULL) {
-if (debugFlow) fprintf(stderr, "Saving...\n");
         AudioIdStateSave(audioid, outputStateFile);
     }
 
-if (debugFlow) fprintf(stderr, "Shutdown...\n");
     AudioIdShutdown(audioid);
 
     AudioIdDestroy(audioid);
@@ -125,8 +112,14 @@ int main(int argc, char *argv[]) {
 
     if (help) {
         printf("AudioID - Daniel Jackson, 2022.\n");
+        printf("https://github.com/danielgjackson/audioid\n");
         printf("\n");
         printf("Usage:  audioid [--events events.ini] [--state state.ini] [--visualize[:reduced]] [sound.wav] [--labels sound.txt [--learn [--write-state state.ini]]]\n");
+        printf("\n");
+        printf("This program is available under the MIT license, and makes use of:\n");
+        printf("\n");
+        printf("  * miniaudio.h - Copyright David Reid, Public Domain/MIT-0, https://miniaud.io\n");
+        printf("  * minfft.{c,h} dr_wav.h - Copyright (c) 2016-2022 Alexander Mukhin, MIT License, https://github.com/aimukhin/minfft\n");
         printf("\n");
         return 1;
     }
