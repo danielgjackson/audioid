@@ -2,6 +2,7 @@
 #
 
 CC = gcc
+#CFLAGS = -g -O1 -Wall
 CFLAGS = -O2 -Wall
 LIBS = -lm -lpthread -ldl
 SRC = src/main.c src/audioid.c src/minfft.c src/miniaudio.c

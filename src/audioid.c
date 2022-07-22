@@ -146,6 +146,7 @@ static void DebugVisualizeValues(running_stats_t *values, size_t count, bool sho
     if (mode == 2 && bufferSize < count) {
         bufferSize = count;
         buffer = realloc(buffer, sizeof(double) * bufferSize);
+        if (buffer == NULL) { fprintf(stderr, "ERROR: Memory failure (buffer).\n"); exit(-1); }
     }
     if (mode == 2 && (bufferLine & 1) == 0) {
         for (size_t x = 0; x < count; x++) {
@@ -497,7 +498,6 @@ typedef struct interval_tag {
     double end;
 } interval_t;
 
-/*
 typedef struct label_tag {
     const char *labelText;
     const char *labelGroup;
@@ -510,7 +510,6 @@ typedef struct label_tag {
     double onlyWithinInterval;
     double lastFinished;
 } label_t;
-*/
 
 // Detector state
 typedef struct audioid_tag {
@@ -538,17 +537,7 @@ typedef struct audioid_tag {
 
     // Labels
     size_t countLabels;
-// TODO: Split into a struct label_t
-    const char **labelsText;
-    const char **labelsGroup;
-    running_stats_t **stats;
-    double *scale;
-    double *limit;
-    size_t *matchingGroup;
-    double *minDuration;
-    int *onlyAfterEvent;
-    double *onlyWithinInterval;
-    double *lastFinished;
+    label_t *labels;
 
     // Intervals
     interval_t *intervals;
@@ -572,13 +561,13 @@ typedef struct audioid_tag {
 
 static const char *AudioIdGetLabelName(audioid_t *audioid, size_t id) {
     if (id >= audioid->countLabels) return NULL;
-    return audioid->labelsText[id];
+    return audioid->labels[id].labelText;
 }
 
 static size_t AudioIdGetLabelId(audioid_t *audioid, const char *labelText) {
     // Return existing label id
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        if (strcmp(audioid->labelsText[id], labelText) == 0) {
+        if (strcmp(audioid->labels[id].labelText, labelText) == 0) {
             return id;
         }
     }
@@ -590,52 +579,43 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *labelText) {
     }
 
     // Add the new label
-    audioid->labelsText = (const char **)realloc((void *)audioid->labelsText, sizeof(const char *) * (audioid->countLabels + 1));
-    audioid->labelsText[audioid->countLabels] = strdup(labelText);
+    audioid->labels = (label_t *)realloc((void *)audioid->labels, sizeof(label_t) * (audioid->countLabels + 1));
+    if (audioid->labels == NULL) { fprintf(stderr, "ERROR: Memory failure (labels).\n"); exit(-1); }
+
+    audioid->labels[audioid->countLabels].labelText = strdup(labelText);
 
     // Initial '?'/'!'/ prefix to flag label (unused)
     bool flagged = (labelText[0] == '?') || (labelText[0] == '!');
 
     // Add the new label's group
-    audioid->labelsGroup = (const char **)realloc((void *)audioid->labelsGroup, sizeof(const char *) * (audioid->countLabels + 1));
     char *group = strdup(labelText + (flagged ? 1 : 0)); // Duplicate (and remove flag prefix)
     char *groupSep = strchr(group, '/');
     if (groupSep != NULL) *groupSep = '\0'; // Leave only the group
-    audioid->labelsGroup[audioid->countLabels] = group;
+    audioid->labels[audioid->countLabels].labelGroup = group;
 
-    // Allocate memory for per-label stats
-    audioid->stats = (running_stats_t **)realloc(audioid->stats, sizeof(running_stats_t *) * (audioid->countLabels + 1));
-    audioid->stats[audioid->countLabels] = (running_stats_t *)malloc(sizeof(running_stats_t) * audioid->countBuckets);
+    // Stats
+    audioid->labels[audioid->countLabels].stats = (running_stats_t *)malloc(sizeof(running_stats_t) * audioid->countBuckets);
     for (size_t i = 0; i < audioid->countBuckets; i++) {
-        running_stats_clear(&audioid->stats[audioid->countLabels][i]);
+        running_stats_clear(&audioid->labels[audioid->countLabels].stats[i]);
     }
 
     // Other per-label values
-    audioid->scale = (double *)realloc(audioid->scale, sizeof(double) * (audioid->countLabels + 1));
-    audioid->scale[audioid->countLabels] = 1.0;
-    audioid->limit = (double *)realloc(audioid->limit, sizeof(double) * (audioid->countLabels + 1));
-    audioid->limit[audioid->countLabels] = -1.0; // < 0 = no limit applied
-    audioid->minDuration = (double *)realloc(audioid->minDuration, sizeof(double) * (audioid->countLabels + 1));
-    audioid->minDuration[audioid->countLabels] = -1.0; // < 0 = disabled
-    audioid->onlyAfterEvent = (int *)realloc(audioid->onlyAfterEvent, sizeof(int) * (audioid->countLabels + 1));
-    audioid->onlyAfterEvent[audioid->countLabels] = LABEL_ID_UNKNOWN;
-    audioid->onlyWithinInterval = (double *)realloc(audioid->onlyWithinInterval, sizeof(double) * (audioid->countLabels + 1));
-    audioid->onlyWithinInterval[audioid->countLabels] = 0.0;
-    audioid->lastFinished = (double *)realloc(audioid->lastFinished, sizeof(double) * (audioid->countLabels + 1));
-    audioid->lastFinished[audioid->countLabels] = -1.0;
+    audioid->labels[audioid->countLabels].scale = 1.0;
+    audioid->labels[audioid->countLabels].limit = -1.0; // < 0 = no limit applied
+    audioid->labels[audioid->countLabels].minDuration = -1.0; // < 0 = disabled
+    audioid->labels[audioid->countLabels].onlyAfterEvent = LABEL_ID_UNKNOWN;
+    audioid->labels[audioid->countLabels].onlyWithinInterval = 0.0;
+    audioid->labels[audioid->countLabels].lastFinished = -1.0;
 
     // Find an earlier matching group
     size_t matchingGroup = audioid->countLabels;
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        if (strcmp(audioid->labelsGroup[id], group) == 0) {
+        if (strcmp(audioid->labels[id].labelGroup, group) == 0) {
             matchingGroup = id;
             break;
         }
     }
-    audioid->matchingGroup = (size_t *)realloc(audioid->matchingGroup, sizeof(size_t) * (audioid->countLabels + 1));
-//fprintf(stderr, "MATCHING GROUP FOR #%zu|%s|%s = #%zu|%s|%s\n", audioid->countLabels, label, group, matchingGroup, audioid->labels[matchingGroup], audioid->labelsGroup[matchingGroup]);
-    audioid->matchingGroup[audioid->countLabels] = matchingGroup;
-
+    audioid->labels[audioid->countLabels].matchingGroup = matchingGroup;
 
     // Return the new label id
     return audioid->countLabels++;
@@ -643,21 +623,12 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *labelText) {
 
 static void AudioIdFreeLabels(audioid_t *audioid) {
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        free((void *)audioid->labelsText[id]);
-        audioid->labelsText[id] = NULL;
-        free((void *)audioid->labelsGroup[id]);
-        audioid->labelsGroup[id] = NULL;
-        free(audioid->stats[id]);
-        audioid->stats[id] = NULL;
+        free((void *)audioid->labels[id].labelText);
+        free((void *)audioid->labels[id].labelGroup);
+        free((void *)audioid->labels[id].stats);
     }
-    free((void *)audioid->labelsText);
-    audioid->labelsText = NULL;
-    free(audioid->stats);
-    audioid->stats = NULL;
-    free(audioid->scale);
-    audioid->scale = NULL;
-    free(audioid->limit);
-    audioid->limit = NULL;
+    free(audioid->labels);
+    audioid->labels = NULL;
     audioid->countLabels = 0;
 }
 
@@ -668,6 +639,7 @@ static size_t AudioIdAddInterval(audioid_t *audioid, const char *label, double s
     if (audioid->countIntervals >= audioid->maxIntervals) {
         audioid->maxIntervals += audioid->maxIntervals + 1;
         audioid->intervals = (interval_t *)realloc(audioid->intervals, sizeof(interval_t) * audioid->maxIntervals);
+        if (audioid->intervals == NULL) { fprintf(stderr, "ERROR: Memory failure (intervals).\n"); exit(-1); }
     }
     interval_t *newInterval = &audioid->intervals[audioid->countIntervals];
     memset(newInterval, 0, sizeof(*newInterval));
@@ -735,7 +707,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             // Add stats to current interval
             if (interval != NULL && audioid->learn) {
                 size_t id = interval->id;
-                running_stats_t *stats = audioid->stats[id];
+                running_stats_t *stats = audioid->labels[id].stats;
                 for (size_t i = 0; i < audioid->countBuckets; i++) {
                     running_stats_add(&stats[i], audioid->fingerprint.buckets[i]);
                 }
@@ -752,9 +724,9 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             double closestDistance = 0;
             if (!audioid->learn) {
                 for (size_t id = 0; id < audioid->countLabels; id++) {
-                    running_stats_t *stats = audioid->stats[id];
-                    double scale = audioid->scale[id];
-                    double limit = audioid->limit[id];
+                    running_stats_t *stats = audioid->labels[id].stats;
+                    double scale = audioid->labels[id].scale;
+                    double limit = audioid->labels[id].limit;
                     double rawDistance = Distance(audioid->countBuckets, inputStats, stats);
                     double distance = scale * rawDistance;
                     bool withinLimit = (limit < 0) || (distance < limit);
@@ -767,7 +739,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
 
                 // ------ STATE ------
                 // State is matching group
-                int thisState = (closestLabel == LABEL_ID_UNKNOWN) ? LABEL_ID_UNKNOWN : (int)audioid->matchingGroup[closestLabel];
+                int thisState = (closestLabel == LABEL_ID_UNKNOWN) ? LABEL_ID_UNKNOWN : (int)audioid->labels[closestLabel].matchingGroup;
 
                 // Add to modal filter
                 audioid->stateHistory[audioid->stateIndex % MODAL_SIZE] = thisState;
@@ -781,7 +753,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                     if (label == LABEL_ID_UNKNOWN) {
                         unknownCount++;
                     } else if (label < audioid->countLabels) {
-                        size_t group = audioid->matchingGroup[label];
+                        size_t group = audioid->labels[label].matchingGroup;
                         if (group < MAX_STATES) matchingGroupCount[group]++;
                         else { fprintf(stderr, "ERROR: Internal error in group index (@%zu = label %d = group %zu)\n", i, label, group); exit(-1); }
                     } else { fprintf(stderr, "ERROR: Internal error in history label (@%zu = label %d)\n", i, label); exit(-1); }
@@ -802,9 +774,9 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                 if (currentState != audioid->lastState) {
                     // Latched event end
                     if (audioid->lastState != LABEL_ID_UNKNOWN && audioid->stateLatched) {
-                        audioid->lastFinished[audioid->lastState] = time;
+                        audioid->labels[audioid->lastState].lastFinished = time;
                         if (!audioid->visualize) {
-                            fprintf(stdout, "%.3f\te:end\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[audioid->lastState]), duration);
+                            fprintf(stdout, "%.3f\te:end\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labels[audioid->lastState].labelGroup), duration);
                             fflush(stdout);
                         }
                     }
@@ -822,7 +794,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                 if (report) {
                     // Report 'hear'
                     if (!audioid->visualize) {
-                        fprintf(stdout, "%.3f\t%s\t%s\t%.3f\n", time, audioid->stateLatched ? "e:cont" : "hear", (currentState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[currentState]), duration);
+                        fprintf(stdout, "%.3f\t%s\t%s\t%.3f\n", time, audioid->stateLatched ? "e:cont" : "hear", (currentState == LABEL_ID_UNKNOWN ? "-" : audioid->labels[currentState].labelGroup), duration);
                         fflush(stdout);
                     }
                     audioid->lastReport = time;
@@ -832,17 +804,17 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                 if (!audioid->stateLatched && currentState != LABEL_ID_UNKNOWN) {
                     bool latch = true;
                     // If there is not required minimum duration set (>=0): do not latch; or there is and it has not yet occurred: do not latch
-                    if (audioid->minDuration[currentState] < 0) latch = false;
-                    if (audioid->minDuration[currentState] >= 0 && duration < audioid->minDuration[currentState]) latch = false;
+                    if (audioid->labels[currentState].minDuration < 0) latch = false;
+                    if (audioid->labels[currentState].minDuration >= 0 && duration < audioid->labels[currentState].minDuration) latch = false;
                     // If there is a required previous event...
-                    if (audioid->onlyAfterEvent[currentState] >= 0) {
-                        double lastFinished = audioid->lastFinished[audioid->onlyAfterEvent[currentState]];
-                        double onlyWithinInterval = audioid->onlyWithinInterval[currentState];
+                    if (audioid->labels[currentState].onlyAfterEvent >= 0) {
+                        double lastFinished = audioid->labels[audioid->labels[currentState].onlyAfterEvent].lastFinished;
+                        double onlyWithinInterval = audioid->labels[currentState].onlyWithinInterval;
                         // ...if it has not occurred, or finished longer ago than the maximum interval before this event started: do not latch 
                         if (lastFinished < 0 || time > lastFinished + onlyWithinInterval + duration) latch = false;
                     }
                     if (latch) {
-                        fprintf(stdout, "%.3f\te:start\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[audioid->lastState]), duration);
+                        fprintf(stdout, "%.3f\te:start\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labels[audioid->lastState].labelGroup), duration);
                         audioid->stateLatched = true;
                         audioid->lastReport = time;
                     }
@@ -854,11 +826,11 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             // Output
             if (audioid->verbose) fprintf(stderr, ">>> %d results.\n", (int)countResults);
             if (audioid->visualize) {
-if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || (interval != NULL && strcmp(audioid->labelsGroup[interval->id], "silence") != 0)) && audioid->fingerprint.cycle == 0))) // only output labelled regions
+if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || (interval != NULL && strcmp(audioid->labels[interval->id].labelGroup, "silence") != 0)) && audioid->fingerprint.cycle == 0))) // only output labelled regions
 {
-                const char *closestLabelName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labelsText[closestLabel];
-                const char *closestGroupName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labelsGroup[closestLabel];
-                const char *intervalGroup = interval != NULL ? audioid->labelsGroup[interval->id] : NULL;
+                const char *closestLabelName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labels[closestLabel].labelText;
+                const char *closestGroupName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labels[closestLabel].labelGroup;
+                const char *intervalGroup = interval != NULL ? audioid->labels[interval->id].labelGroup : NULL;
                 
                 bool showMatch = !audioid->learn;
 
@@ -945,12 +917,16 @@ bool AudioIdStart(audioid_t *audioid) {
     if (audioid->labelFile != NULL) {
         fprintf(stderr, "AUDIOID: Opening label file: %s\n", audioid->labelFile);
         FILE *fp = fopen(audioid->labelFile, "r");
+        if (fp == NULL) {
+            fprintf(stderr, "ERROR: Problem opening label file: %s\n", audioid->labelFile);
+            return false;
+        }
         char lineBuffer[256];
         for (size_t lineNumber = 1; ; lineNumber++) {
             char *line = fgets(lineBuffer, sizeof(lineBuffer) - 1, fp);
             if (line == NULL) break;
 
-            double start, end;
+            double start = -1, end = -1;
             const char *labelString = NULL;
             const char *token = strtok(line,"\t");
             if (token != NULL) start = atof(token);
@@ -1130,17 +1106,17 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
                     char *sumVar = strtok(NULL, " ");
                     if (count != NULL && mean != NULL && sumVar != NULL) {
                         if (index < audioid->countBuckets) {
-                            running_stats_t *stats = &audioid->stats[labelId][index];
+                            running_stats_t *stats = &audioid->labels[labelId].stats[index];
                             stats->count = atoi(count);
                             stats->mean = atoi(mean);
                             stats->sumVar = atoi(sumVar);
                         } else {
-                            fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat index %zu exceeds bucket count %zu: %s\n", filename, audioid->labelsText[labelId], lineNumber, index, audioid->countBuckets, name);
+                            fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat index %zu exceeds bucket count %zu: %s\n", filename, audioid->labels[labelId].labelText, lineNumber, index, audioid->countBuckets, name);
                             errors++;
                         }
                         index++;
                     } else {
-                        fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu malformed stat at index %zu: %s\n", filename, audioid->labelsText[labelId], lineNumber, index, name);
+                        fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu malformed stat at index %zu: %s\n", filename, audioid->labels[labelId].labelText, lineNumber, index, name);
                         errors++;
                     }
 
@@ -1154,15 +1130,15 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
                     errors++;
                 }
             } else if (strcmp(name, "scale") == 0) {
-                audioid->scale[labelId] = atof(value);
+                audioid->labels[labelId].scale = atof(value);
             } else if (strcmp(name, "limit") == 0) {
-                audioid->limit[labelId] = atof(value);
+                audioid->labels[labelId].limit = atof(value);
             } else if (strcmp(name, "minduration") == 0) {
-                audioid->minDuration[labelId] = atof(value);
+                audioid->labels[labelId].minDuration = atof(value);
             } else if (strcmp(name, "afterevent") == 0) {
-                audioid->onlyAfterEvent[labelId] = (int)AudioIdGetLabelId(audioid, value);
+                audioid->labels[labelId].onlyAfterEvent = (int)AudioIdGetLabelId(audioid, value);
             } else if (strcmp(name, "withininterval") == 0) {
-                audioid->onlyWithinInterval[labelId] = atof(value);
+                audioid->labels[labelId].onlyWithinInterval = atof(value);
             } else {
                 fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu unrecognized name: %s\n", filename, AudioIdGetLabelName(audioid, labelId), lineNumber, name);
                 errors++;
@@ -1187,16 +1163,16 @@ bool AudioIdStateSave(audioid_t *audioid, const char *filename) {
     fprintf(fp, "bucketcount = %zu\n", audioid->countBuckets);
     fprintf(fp, "\n");
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        fprintf(fp, "[%s]\n", audioid->labelsText[id]);
+        fprintf(fp, "[%s]\n", audioid->labels[id].labelText);
 
         fprintf(fp, "stats = \"");
         for (size_t i = 0; i < audioid->countBuckets; i++) {
-            running_stats_t *stats = &audioid->stats[id][i];
+            running_stats_t *stats = &audioid->labels[id].stats[i];
             fprintf(fp, "%s%u %f %f", i == 0 ? "" : "; ", stats->count, stats->mean, stats->sumVar);
         }
         fprintf(fp, "\"\n");
-        fprintf(fp, "scale = %f\n", audioid->scale[id]);
-        fprintf(fp, "limit = %f\n", audioid->limit[id]);
+        fprintf(fp, "scale = %f\n", audioid->labels[id].scale);
+        fprintf(fp, "limit = %f\n", audioid->labels[id].limit);
 
         fprintf(fp, "\n");
     }

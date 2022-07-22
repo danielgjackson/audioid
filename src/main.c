@@ -40,7 +40,10 @@ int run(const char *filename, int visualize, bool learn, const char *eventsFile,
     }
 
     // Start processing
-    AudioIdStart(audioid);
+    if (!AudioIdStart(audioid)) {
+        fprintf(stderr, "ERROR: Problem starting.\n");
+        return -1;
+    }
 
     // Block until completed
     AudioIdWaitUntilDone(audioid);
