@@ -497,6 +497,20 @@ typedef struct interval_tag {
     double end;
 } interval_t;
 
+/*
+typedef struct label_tag {
+    const char *labelText;
+    const char *labelGroup;
+    running_stats_t *stats;
+    double scale;
+    double limit;
+    size_t matchingGroup;
+    double minDuration;
+    int onlyAfterEvent;
+    double onlyWithinInterval;
+    double lastFinished;
+} label_t;
+*/
 
 // Detector state
 typedef struct audioid_tag {
@@ -525,7 +539,7 @@ typedef struct audioid_tag {
     // Labels
     size_t countLabels;
 // TODO: Split into a struct label_t
-    const char **labels;
+    const char **labelsText;
     const char **labelsGroup;
     running_stats_t **stats;
     double *scale;
@@ -558,13 +572,13 @@ typedef struct audioid_tag {
 
 static const char *AudioIdGetLabelName(audioid_t *audioid, size_t id) {
     if (id >= audioid->countLabels) return NULL;
-    return audioid->labels[id];
+    return audioid->labelsText[id];
 }
 
-static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
+static size_t AudioIdGetLabelId(audioid_t *audioid, const char *labelText) {
     // Return existing label id
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        if (strcmp(audioid->labels[id], label) == 0) {
+        if (strcmp(audioid->labelsText[id], labelText) == 0) {
             return id;
         }
     }
@@ -576,15 +590,15 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
     }
 
     // Add the new label
-    audioid->labels = (const char **)realloc((void *)audioid->labels, sizeof(const char *) * (audioid->countLabels + 1));
-    audioid->labels[audioid->countLabels] = strdup(label);
+    audioid->labelsText = (const char **)realloc((void *)audioid->labelsText, sizeof(const char *) * (audioid->countLabels + 1));
+    audioid->labelsText[audioid->countLabels] = strdup(labelText);
 
     // Initial '?'/'!'/ prefix to flag label (unused)
-    bool flagged = (label[0] == '?') || (label[0] == '!');
+    bool flagged = (labelText[0] == '?') || (labelText[0] == '!');
 
     // Add the new label's group
     audioid->labelsGroup = (const char **)realloc((void *)audioid->labelsGroup, sizeof(const char *) * (audioid->countLabels + 1));
-    char *group = strdup(label + (flagged ? 1 : 0)); // Duplicate (and remove flag prefix)
+    char *group = strdup(labelText + (flagged ? 1 : 0)); // Duplicate (and remove flag prefix)
     char *groupSep = strchr(group, '/');
     if (groupSep != NULL) *groupSep = '\0'; // Leave only the group
     audioid->labelsGroup[audioid->countLabels] = group;
@@ -629,15 +643,15 @@ static size_t AudioIdGetLabelId(audioid_t *audioid, const char *label) {
 
 static void AudioIdFreeLabels(audioid_t *audioid) {
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        free((void *)audioid->labels[id]);
-        audioid->labels[id] = NULL;
+        free((void *)audioid->labelsText[id]);
+        audioid->labelsText[id] = NULL;
         free((void *)audioid->labelsGroup[id]);
         audioid->labelsGroup[id] = NULL;
         free(audioid->stats[id]);
         audioid->stats[id] = NULL;
     }
-    free((void *)audioid->labels);
-    audioid->labels = NULL;
+    free((void *)audioid->labelsText);
+    audioid->labelsText = NULL;
     free(audioid->stats);
     audioid->stats = NULL;
     free(audioid->scale);
@@ -842,7 +856,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
             if (audioid->visualize) {
 if (audioid->visualize == 1 || (audioid->visualize == 2 && ((audioid->learn || audioid->labelFile == NULL || (interval != NULL && strcmp(audioid->labelsGroup[interval->id], "silence") != 0)) && audioid->fingerprint.cycle == 0))) // only output labelled regions
 {
-                const char *closestLabelName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labels[closestLabel];
+                const char *closestLabelName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labelsText[closestLabel];
                 const char *closestGroupName = closestLabel == LABEL_ID_UNKNOWN ? NULL : audioid->labelsGroup[closestLabel];
                 const char *intervalGroup = interval != NULL ? audioid->labelsGroup[interval->id] : NULL;
                 
@@ -1121,12 +1135,12 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
                             stats->mean = atoi(mean);
                             stats->sumVar = atoi(sumVar);
                         } else {
-                            fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat index %zu exceeds bucket count %zu: %s\n", filename, audioid->labels[labelId], lineNumber, index, audioid->countBuckets, name);
+                            fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu stat index %zu exceeds bucket count %zu: %s\n", filename, audioid->labelsText[labelId], lineNumber, index, audioid->countBuckets, name);
                             errors++;
                         }
                         index++;
                     } else {
-                        fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu malformed stat at index %zu: %s\n", filename, audioid->labels[labelId], lineNumber, index, name);
+                        fprintf(stderr, "ERROR: Problem reading state file %s section %s line %zu malformed stat at index %zu: %s\n", filename, audioid->labelsText[labelId], lineNumber, index, name);
                         errors++;
                     }
 
@@ -1173,7 +1187,7 @@ bool AudioIdStateSave(audioid_t *audioid, const char *filename) {
     fprintf(fp, "bucketcount = %zu\n", audioid->countBuckets);
     fprintf(fp, "\n");
     for (size_t id = 0; id < audioid->countLabels; id++) {
-        fprintf(fp, "[%s]\n", audioid->labels[id]);
+        fprintf(fp, "[%s]\n", audioid->labelsText[id]);
 
         fprintf(fp, "stats = \"");
         for (size_t i = 0; i < audioid->countBuckets; i++) {
