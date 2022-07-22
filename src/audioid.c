@@ -808,7 +808,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                 if (report) {
                     // Report 'hear'
                     if (!audioid->visualize) {
-                        fprintf(stdout, "%.3f\t%s\t%s\t%.3f\n", time, audioid->stateLatched ? "e:cont" : "hear", (currentState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[currentState]), duration, (closestLabel == LABEL_ID_UNKNOWN) ? "-" : audioid->labels[closestLabel]);
+                        fprintf(stdout, "%.3f\t%s\t%s\t%.3f\n", time, audioid->stateLatched ? "e:cont" : "hear", (currentState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[currentState]), duration);
                         fflush(stdout);
                     }
                     audioid->lastReport = time;
@@ -1146,7 +1146,7 @@ bool AudioIdStateLoad(audioid_t *audioid, const char *filename) {
             } else if (strcmp(name, "minduration") == 0) {
                 audioid->minDuration[labelId] = atof(value);
             } else if (strcmp(name, "afterevent") == 0) {
-                audioid->onlyAfterEvent[labelId] = AudioIdGetLabelId(audioid, value);
+                audioid->onlyAfterEvent[labelId] = (int)AudioIdGetLabelId(audioid, value);
             } else if (strcmp(name, "withininterval") == 0) {
                 audioid->onlyWithinInterval[labelId] = atof(value);
             } else {
