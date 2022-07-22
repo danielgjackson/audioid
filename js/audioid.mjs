@@ -56,7 +56,7 @@ export class AudioId {
             const parts = line.split('\t');
             const event = {
                 time: parseFloat(parts[0]),
-                type: parts[1],                     // 'hear' - non-event status; 'e:start' - event has definitely started; 'e:cont' - status update that event is still ongoing; 'e:end' - event has completed with final duration.
+                type: parts[1],
                 label: parts[2],                    // 'grinder' / 'pump'
                 duration: parseFloat(parts[3]),
             };

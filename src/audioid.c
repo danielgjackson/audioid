@@ -834,6 +834,7 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
                     if (latch) {
                         fprintf(stdout, "%.3f\te:start\t%s\t%.3f\n", time, (audioid->lastState == LABEL_ID_UNKNOWN ? "-" : audioid->labelsGroup[audioid->lastState]), duration);
                         audioid->stateLatched = true;
+                        audioid->lastReport = time;
                     }
                 }
 
