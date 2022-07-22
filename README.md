@@ -5,7 +5,9 @@ Sound identification.
 <!--
 ./audioid --visualize --labels data/on-single-off-on-flush-off.txt data/on-single-off-on-flush-off.wav --learn --write-state state.ini
 
-./audioid --visualize --state state.ini data/on-single-off-on-flush-off.wav --labels data/on-single-off-on-flush-off.txt
+./audioid --visualize --events events.ini --state state.ini data/on-single-off-on-flush-off.wav --labels data/on-single-off-on-flush-off.txt
+
+./audioid --events events.ini --state state.ini
 -->
 
 Uses:

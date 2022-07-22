@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AudioID Demo Website</title>
+    <style>
+        body {
+            font-family: sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <h1>AudioID Demo Website</h1>
+    <p id="status">...</p>
+    <script>
+        const url = `${((window.location.protocol === 'https:') ? 'wss:' : 'ws:')}${window.location.host}/audioid`;
+        const socket = new WebSocket(url);
+        socket.onmessage = (event) => {
+            const eventData = JSON.parse(event.data);
+            const debugInfo = `AUDIOID: At ${eventData.time.toFixed(2)} s, event '${eventData.type}', label '${eventData.label}', duration ${eventData.duration.toFixed(2)} s.`;
+            document.getElementById('status').innerText = debugInfo;
+        }
+    </script>
+</body>
+</html>
