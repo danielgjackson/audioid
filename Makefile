@@ -18,8 +18,8 @@ endif
 all: audioid
 
 audioid: Makefile $(SRC) $(INC)
-        echo $(CPU)
-        $(CC) -o audioid $(CFLAGS) $(SRC) -I/usr/local/include -L/usr/local/lib $(LIBS)
+	echo $(CPU)
+	$(CC) -o audioid $(CFLAGS) $(SRC) -I/usr/local/include -L/usr/local/lib $(LIBS)
 
 clean:
-        rm -f *.o core audioid
+	rm -f *.o core audioid
