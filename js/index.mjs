@@ -63,6 +63,7 @@ const audioId = new AudioId({
 });
 audioId.start(audioEventHandler);
 
-server.listen(3000, () => {
-    console.log('Listening at http://localhost:3000')
+const port = 3001;
+server.listen(port, () => {
+    console.log(`Listening at http://localhost:${port}`);
 });
