@@ -10,6 +10,7 @@ const currentFolder = path.dirname(fileURLToPath(import.meta.url))
 // Settings
 const options = {
     port: 3001,
+    relative: true,
     binaryPath: '../audioid', 
     eventsFile: '../events.ini',
     stateFile: '../state.ini',
@@ -65,9 +66,9 @@ wss.on('connection', (ws) => {
 app.use('/', express.static(path.join(currentFolder, 'public')))
 
 const audioId = new AudioId({
-    binaryPath: path.join(currentFolder, options.binaryPath), 
-    eventsFile: path.join(currentFolder, options.eventsFile),
-    stateFile: path.join(currentFolder, options.stateFile),
+    binaryPath: options.relative ? path.join(currentFolder, options.binaryPath) : options.binaryPath, 
+    eventsFile: options.relative ? path.join(currentFolder, options.eventsFile) : options.eventsFile,
+    stateFile: options.relative ? path.join(currentFolder, options.stateFile) : options.stateFile,
 });
 audioId.start(audioEventHandler);
 
