@@ -46,11 +46,23 @@ Learning from an audio file accompanied with labels (tab-separated start/end/lab
 ./audioid --visualize --labels data/on-single-off-on-flush-off.txt data/on-single-off-on-flush-off.wav --learn --write-state state.ini
 ```
 
+<!--
+```bash
+./audioid --visualize --labels ../beancounter/audioid/data/on-single-off-on-flush-off.txt ../beancounter/audioid/data/on-single-off-on-flush-off.wav --learn --write-state state.ini
+```
+-->
+
 Testing from existing labels:
 
 ```bash
 ./audioid --visualize --state state.ini data/on-single-off-on-flush-off.wav --labels data/on-single-off-on-flush-off.txt
 ```
+
+<!--
+```bash
+./audioid --visualize --state state.ini ../beancounter/audioid/data/on-single-off-on-flush-off.wav --labels ../beancounter/audioid/data/on-single-off-on-flush-off.txt
+```
+-->
 
 Example events file (`events.ini`):
 
