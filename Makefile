@@ -9,7 +9,8 @@ SRC = src/main.c src/audioid.c src/minfft.c src/miniaudio.c
 INC = src/audioid.h src/dr_wav.h src/minfft.h src/miniaudio.h
 
 # arm requires libatomic
-CPU=$($(CC) -print-multiarch | sed 's/-.*//')
+CPU := $(shell gcc -print-multiarch | sed 's/-.*//')
+
 ifeq ($(CPU),arm)
   LIBS += -latomic
 endif
@@ -17,7 +18,8 @@ endif
 all: audioid
 
 audioid: Makefile $(SRC) $(INC)
-	$(CC) -o audioid $(CFLAGS) $(SRC) -I/usr/local/include -L/usr/local/lib $(LIBS)
+        echo $(CPU)
+        $(CC) -o audioid $(CFLAGS) $(SRC) -I/usr/local/include -L/usr/local/lib $(LIBS)
 
 clean:
-	rm -f *.o core audioid
+        rm -f *.o core audioid
