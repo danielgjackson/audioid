@@ -5,15 +5,15 @@ import { WebSocketServer } from 'ws'
 import { fileURLToPath } from 'url'
 import AudioId from './audioid.mjs'
 
+const currentFolder = path.dirname(fileURLToPath(import.meta.url))
+
 // Settings
-const port = 3001;
-const audioId = new AudioId({
+const options = {
+    port: 3001,
     binaryPath: '../audioid', 
     eventsFile: '../events.ini',
     stateFile: '../state.ini',
-});
-
-const currentFolder = path.dirname(fileURLToPath(import.meta.url))
+};
 
 const app = express()
 const server = http.Server(app)
@@ -64,8 +64,13 @@ wss.on('connection', (ws) => {
 
 app.use('/', express.static(path.join(currentFolder, 'public')))
 
+const audioId = new AudioId({
+    binaryPath: path.join(currentFolder, options.binaryPath), 
+    eventsFile: path.join(currentFolder, options.eventsFile),
+    stateFile: path.join(currentFolder, options.stateFile),
+});
 audioId.start(audioEventHandler);
 
-server.listen(port, () => {
-    console.log(`Listening at http://localhost:${port}`);
+server.listen(options.port, () => {
+    console.log(`Listening at http://localhost:${options.port}`);
 });
