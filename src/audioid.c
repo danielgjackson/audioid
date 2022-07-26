@@ -5,7 +5,11 @@
 #ifdef _MSC_VER
     #define _CRT_SECURE_NO_WARNINGS     // fopen / strtok
     #define _CRT_NONSTDC_NO_DEPRECATE   // strdup
+#endif
+
+#ifdef _WIN32
     #define _USE_MATH_DEFINES
+	#define USE_FTIME
 #endif
 
 #include <stdlib.h>
@@ -13,6 +17,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+
+#ifdef USE_FTIME
+    #include <sys/timeb.h>
+#endif
 
 #include "miniaudio.h"
 #include "dr_wav.h"
@@ -32,6 +40,21 @@
 #define MODAL_SIZE ((AUDIOID_DEFAULT_CYCLE_COUNT) * 150 / 100)
 #define MAX_STATES 64
 #define REPORT_MAX_INTERVAL 1.0
+
+
+// Returns the number of seconds since the epoch
+static double TimeNow()
+{
+#ifdef USE_FTIME
+	struct timeb tp;
+	ftime(&tp);
+	return ((unsigned long long)tp.time * 1000 + tp.millitm) / 1000.0;
+#else
+	struct timespec tp;
+	if (clock_gettime(CLOCK_REALTIME, &tp) == -1) return 0;
+	return (double)tp.tv_sec + (tp.tv_nsec / 1000000000.0);
+#endif
+}
 
 
 // Reduced loss of precision for running stats, informed by: https://www.johndcook.com/blog/standard_deviation/
@@ -670,6 +693,11 @@ static void AudioIdProcess(audioid_t *audioid, int16_t *samples, size_t sampleCo
         if (buckets != NULL && countResults > 0) {            
             // Current recording time
             double time = (double)audioid->totalSamples / audioid->sampleRate;
+
+            // For live recordings, use the system epoch time
+            if (audioid->filename == NULL) {
+                time = TimeNow();
+            }
 
             // If we are making our way through the labelled intervals...
             interval_t *interval = NULL;

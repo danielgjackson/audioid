@@ -7,7 +7,7 @@ function captureExternalProcess(command, parameterArray, lineHandler) {
 
     // Start the child process
     console.log('Running external process...');
-    const externalProcess = child_process.spawn(command, parameterArray);
+    let externalProcess = child_process.spawn(command, parameterArray);
 
     // Handle output from the child process
     externalProcess.stdout.on('data', (data) => {
@@ -55,7 +55,7 @@ export class AudioId {
         captureExternalProcess(this.options.binaryPath, ['--events', this.options.eventsFile, '--state', this.options.stateFile], (line) => {
             const parts = line.split('\t');
             const event = {
-                time: parseFloat(parts[0]),
+                time: parseFloat(parts[0]) * 1000,  // convert epoch-seconds to epoch-milliseconds
                 type: parts[1],
                 label: parts[2],                    // 'grinder' / 'pump'
                 duration: parseFloat(parts[3]),

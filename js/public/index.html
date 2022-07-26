@@ -14,12 +14,44 @@
     <h1>AudioID Demo Website</h1>
     <p id="status">...</p>
     <script>
+        const maxHistory = 50;
+        const recent = [];
         const url = `${((window.location.protocol === 'https:') ? 'wss:' : 'ws:')}${window.location.host}/audioid`;
         const socket = new WebSocket(url);
+
+        function TimeString(time) {
+            const pad = (str, size = 2) => ('0'.repeat(size - 1) + str).slice(-size);
+            return time.getFullYear() + '-' + pad(time.getMonth() + 1) + '-' + pad(time.getDate()) + ' ' + pad(time.getHours()) + ':' + pad(time.getMinutes()) + ':' + pad(time.getSeconds()) + '.' + pad(time.getMilliseconds(), 3)
+        }
+
+        function ToString(eventData) {
+            const debugInfo = `${TimeString(new Date(eventData.time))} ${eventData.type} ${eventData.label} (${eventData.duration.toFixed(2)} s)`;
+            return debugInfo;
+        }
+
         socket.onmessage = (event) => {
-            const eventData = JSON.parse(event.data);
-            const debugInfo = `AUDIOID: At ${eventData.time.toFixed(2)} s, event '${eventData.type}', label '${eventData.label}', duration ${eventData.duration.toFixed(2)} s.`;
-            document.getElementById('status').innerText = debugInfo;
+            const input = JSON.parse(event.data);
+            if (input.message == 'recent') {
+                recent.push(...input.data);
+            } else if (input.message == 'update' || input.message == 'new') {
+                const eventData = input.data;
+                const debugInfo = ToString(eventData);
+                console.log(debugInfo);
+                if (input.message == 'update' && recent.length > 0) {
+                    recent[recent.length - 1] = input.data;
+                } else {
+                    recent.push(eventData);
+                }
+            }
+            recent.splice(0, recent.length - maxHistory);
+
+            const outputLines = [];
+            for (let i = recent.length - 1; i >= 0; i--) {
+                outputLines.push(ToString(recent[i]));
+            }
+
+            const outputText = outputLines.join('\n');
+            document.getElementById('status').innerText = outputText;
         }
     </script>
 </body>
